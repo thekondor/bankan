@@ -1,0 +1,637 @@
+package ui
+
+import (
+	"fmt"
+	bankan "github.com/thekondor/bankan"
+)
+
+// NoActiveBoardsPage is shown when all boards are hidden or archived.
+// It renders the tab header (including the ▽ overflow dropdown) so the user
+// can restore a hidden board, but the main area shows a prompt instead of lanes.
+templ NoActiveBoardsPage(data BoardPageData) {
+	@Layout("bankan", data.Token, "") {
+		@boardHeader(data)
+		<main class="board-view board-view-empty">
+			<div class="all-hidden-message">
+				<p class="all-hidden-title">No boards visible</p>
+				<p class="all-hidden-sub">Create a new board or select an existing one from the hidden list ▽</p>
+			</div>
+		</main>
+	}
+}
+
+templ BoardPage(data BoardPageData) {
+	@Layout(data.CurrentBoard.Name, data.Token, data.CurrentBoard.Color) {
+		@boardHeader(data)
+		<main
+			class="board-view"
+			id="board-view"
+			hx-ext="morph"
+			data-board={ data.CurrentBoard.ID }
+		>
+			for _, lc := range data.Lanes {
+				if lc.IsVirtual {
+					@ArchivedLaneSection(lc, data.Labels, data.CurrentBoard.ID, data.Token)
+				} else {
+					@Lane(lc, data.Labels, data.CurrentBoard.ID, data.Token, data.IsView, data.IsReadonly)
+				}
+			}
+			if !data.ShowArchived && !data.IsReadonly {
+				<div class="add-lane-col">
+					<button
+						class="btn-add-lane"
+						onclick="openAddLaneForm(this)"
+					>+ Add Lane</button>
+					@addLaneForm(data.CurrentBoard.ID, data.Token)
+				</div>
+			}
+		</main>
+	}
+}
+
+templ boardHeader(data BoardPageData) {
+	<header class="site-header">
+		<a href="/" class="site-logo">⬛ bankan</a>
+		if len(data.HiddenBoards) > 0 || len(data.ArchivedViewBoards) > 0 {
+			<div class="boards-overflow-dropdown" id="boards-overflow-dropdown">
+				<button
+					class="btn-add-board"
+					onclick="toggleBoardsOverflowPanel()"
+					title="Hidden boards and archived views"
+				>▽</button>
+				<div class="boards-overflow-panel" id="boards-overflow-panel" style="display:none">
+					if len(data.HiddenBoards) > 0 {
+						<div class="overflow-panel-section-title">Hidden boards</div>
+						for _, b := range data.HiddenBoards {
+							<a
+								class="overflow-board-item"
+								href="#"
+								onclick={ templ.ComponentScript{Call: "showBoardFromDropdown(event, '" + b.ID + "')"} }
+							>
+								{ b.Name }
+								if b.IsView {
+									<span class="view-badge">view</span>
+								}
+							</a>
+						}
+					}
+					if len(data.ArchivedViewBoards) > 0 {
+						<div class="overflow-panel-section-title" id="archived-views-section-title">Archived views</div>
+						for _, b := range data.ArchivedViewBoards {
+							if b.ID != data.CurrentBoard.ID {
+								<a
+									class="overflow-board-item"
+									data-archived-item-id={ b.ID }
+									href={ templ.SafeURL("/ui/boards/" + b.ID) }
+									onclick={ templ.ComponentScript{Call: "showArchivedTab(event, '" + b.ID + "')"} }
+								>{ b.Name }</a>
+							}
+						}
+					}
+				</div>
+			</div>
+		}
+		<nav class="board-tabs" id="board-tabs">
+			// AllBoards contains visible and hidden boards in registry (order:) order.
+			// Hidden boards are rendered display:none so JS can restore them at the
+			// correct position without a page reload.
+			for _, b := range data.AllBoards {
+				if b.IsHidden {
+					<a
+						href={ templ.SafeURL("/ui/boards/" + b.ID) }
+						class="board-tab board-tab-hidden"
+						data-hidden-id={ b.ID }
+						style="display:none"
+						hx-get={ "/ui/boards/" + b.ID }
+						hx-target="body"
+						hx-push-url="true"
+					>
+						{ b.Name }
+						if b.IsView {
+							<span class="view-badge">view</span>
+						}
+					</a>
+				} else {
+					<a
+						href={ templ.SafeURL("/ui/boards/" + b.ID) }
+						class={ "board-tab", templ.KV("active", b.ID == data.CurrentBoard.ID) }
+						data-board-id={ b.ID }
+						hx-get={ "/ui/boards/" + b.ID }
+						hx-target="body"
+						hx-push-url="true"
+					>
+						{ b.Name }
+						if b.IsView {
+							<span class="view-badge">view</span>
+						}
+						<button
+							class="close-board-tab"
+							onclick={ templ.ComponentScript{Call: "hideBoard(event, '" + b.ID + "')"} }
+							title="Hide from tab bar"
+						>✕</button>
+					</a>
+				}
+			}
+			// Archived view board tabs — hidden by default, shown via JS/localStorage.
+			for _, b := range data.ArchivedViewBoards {
+				<a
+					href={ templ.SafeURL("/ui/boards/" + b.ID) }
+					class={ "board-tab board-tab-archived", templ.KV("active", b.ID == data.CurrentBoard.ID) }
+					data-archived-id={ b.ID }
+					style="display:none"
+					hx-get={ "/ui/boards/" + b.ID }
+					hx-target="body"
+					hx-push-url="true"
+				>
+					{ b.Name }
+					<span class="view-badge">view</span>
+					<span class="archived-badge">archived</span>
+					<button
+						class="close-archived-tab"
+						onclick={ templ.ComponentScript{Call: "hideArchivedTab(event, '" + b.ID + "')"} }
+						title="Hide from tab bar"
+					>✕</button>
+				</a>
+			}
+		</nav>
+	if data.IsView && data.IsReadonly {
+		<span class="board-readonly-badge">📦 archived · read-only</span>
+	} else if data.IsView {
+		<button
+			class="btn-add-board"
+			hx-post={ "/ui/boards/" + data.CurrentBoard.ID + "/sync" }
+			hx-target="#board-view"
+			hx-swap="outerHTML"
+			hx-headers={ `{"X-Bankan-Token": "` + data.Token + `"}` }
+		>↻ Sync</button>
+		<div class="dropdown">
+			<button class="btn-add-board" onclick="toggleDropdown(this)">···</button>
+			<div class="dropdown-menu">
+				<button class="dropdown-item" onclick={ templ.ComponentScript{Call: "openBoardSettingsModal('" + data.CurrentBoard.ID + "')"} }>⬛ Change color</button>
+				<div class="dropdown-sep"></div>
+				<button class="dropdown-item danger" onclick={ templ.ComponentScript{Call: "openArchiveViewBoardDialog('" + data.CurrentBoard.ID + "', '" + data.CurrentBoard.Name + "', '" + data.FilterLabel + "')"} }>📦 Archive board</button>
+			</div>
+		</div>
+	} else {
+		<button
+			id="labels-count-btn"
+			data-count={ fmt.Sprintf("%d", len(data.Labels)) }
+			class="btn-add-board"
+			onclick={ templ.ComponentScript{Call: "openManageLabelsModal('" + data.CurrentBoard.ID + "')"} }
+		>Labels ({ fmt.Sprintf("%d", len(data.Labels)) })</button>
+		<div class="dropdown">
+			<button class="btn-add-board" onclick="toggleDropdown(this)">···</button>
+			<div class="dropdown-menu">
+				<button class="dropdown-item" onclick={ templ.ComponentScript{Call: "openBoardSettingsModal('" + data.CurrentBoard.ID + "')"} }>⬛ Change color</button>
+				<div class="dropdown-sep"></div>
+				if data.ShowArchived {
+					<a
+						class="dropdown-item"
+						href={ templ.SafeURL("/ui/boards/" + data.CurrentBoard.ID) }
+						hx-get={ "/ui/boards/" + data.CurrentBoard.ID }
+						hx-target="body"
+						hx-push-url="true"
+					>📦 Hide archived</a>
+				} else {
+					<a
+						class="dropdown-item"
+						href={ templ.SafeURL("/ui/boards/" + data.CurrentBoard.ID + "?show_archived=true") }
+						hx-get={ "/ui/boards/" + data.CurrentBoard.ID + "?show_archived=true" }
+						hx-target="body"
+						hx-push-url="true"
+					>📦 Show archived</a>
+				}
+			</div>
+		</div>
+	}
+	if !data.IsReadonly {
+		<button
+			class="btn-add-board"
+			onclick="openAddBoardModal()"
+		>+ New Board</button>
+	}
+	</header>
+}
+
+templ addLaneForm(boardID string, token string) {
+	<div class="inline-form" id="add-lane-form">
+		<input
+			type="text"
+			id="new-lane-name"
+			placeholder="Lane name"
+			autocomplete="off"
+			data-board={ boardID }
+			onkeydown="if(event.key==='Enter'){event.preventDefault();doSubmitAddLane(this.dataset.board);}else if(event.key==='Escape'){closeAddLaneForm();}"
+		/>
+		<div class="form-row">
+			<button
+				class="btn btn-primary btn-sm"
+				data-action="add-lane-submit"
+				data-board={ boardID }
+			>Add Lane</button>
+			<button class="btn btn-ghost btn-sm" onclick="closeAddLaneForm()">Cancel</button>
+		</div>
+	</div>
+}
+
+templ Lane(lc LaneWithCards, labels []bankan.Label, boardID string, token string, isView bool, isReadonly bool) {
+	<div
+		class="lane"
+		id={ "lane-" + lc.Lane.Name }
+		data-lane={ lc.Lane.Name }
+		data-lane-id={ boardID + ":" + lc.Lane.Name }
+	>
+		<div class="lane-header">
+			<span class="lane-title">{ lc.Lane.Name }</span>
+			<div style="display:flex;align-items:center;gap:6px">
+				<span class="lane-count">{ fmt.Sprintf("%d", len(lc.Cards)) }</span>
+				if !isReadonly {
+					<div class="dropdown">
+						<button class="lane-menu-btn" onclick="toggleDropdown(this)">···</button>
+						<div class="dropdown-menu">
+							<button class="dropdown-item" onclick={ templ.ComponentScript{Call: "openRenameLaneModal('" + lc.Lane.Name + "', '" + boardID + "')"} }>✎ Rename</button>
+							<button class="dropdown-item lane-expand-btn" onclick="toggleLaneExpandByBtn(this)">↕ Expand</button>
+							<div class="dropdown-sep"></div>
+						<button
+							class="dropdown-item danger"
+							hx-delete={ "/ui/boards/" + boardID + "/lanes/" + lc.Lane.Name }
+							hx-confirm={ "Remove lane '" + lc.Lane.Name + "'? This cannot be undone." }
+							hx-headers={ `{"X-Bankan-Token": "` + token + `"}` }
+							hx-target="closest .lane"
+							hx-swap="outerHTML"
+						>🗑 Remove</button>
+						</div>
+					</div>
+				}
+			</div>
+		</div>
+		<div
+			class="lane-cards"
+			id={ "cards-" + lc.Lane.Name }
+			data-lane={ lc.Lane.Name }
+			data-board={ boardID }
+		>
+			if len(lc.Cards) == 0 {
+				<div class="empty-lane">No cards yet</div>
+			}
+			for _, c := range lc.Cards {
+				if c.ArchivedAt != nil {
+					@ArchivedCardItem(c, labels, boardID)
+				} else {
+					@CardItem(c, labels, boardID, token, isView, isReadonly)
+				}
+			}
+		</div>
+		if !isReadonly {
+			<div class="lane-footer">
+				<button
+					class="btn-add-card"
+					onclick={ templ.ComponentScript{Call: "openAddCardForm('" + lc.Lane.Name + "', '" + boardID + "')"} }
+				>+ Add card</button>
+				@addCardForm(lc.Lane.Name, boardID, labels, token)
+			</div>
+		}
+	</div>
+}
+
+// ArchivedLaneSection renders a virtual read-only lane for archived cards whose
+// original lane no longer exists. It has no management controls or add-card form.
+templ ArchivedLaneSection(lc LaneWithCards, labels []bankan.Label, boardID string, token string) {
+	<div
+		class="lane lane-archived-virtual"
+		id="lane-archived"
+	>
+		<div class="lane-header">
+			<span class="lane-title" style="opacity:0.6">📦 Archived</span>
+			<span class="lane-count" style="opacity:0.6">{ fmt.Sprintf("%d", len(lc.Cards)) }</span>
+		</div>
+		<div class="lane-cards" id="cards-archived">
+			for _, c := range lc.Cards {
+				@ArchivedCardItem(c, labels, boardID)
+			}
+		</div>
+	</div>
+}
+
+templ addCardForm(laneName string, boardID string, labels []bankan.Label, token string) {
+	<div class="inline-form" id={ "add-card-form-" + laneName }>
+		<input
+			type="text"
+			id={ "new-card-title-" + laneName }
+			placeholder="Card title"
+			autocomplete="off"
+			data-lane={ laneName }
+			data-board={ boardID }
+			onkeydown="if(event.key==='Enter'){event.preventDefault();submitAddCard(this.dataset.lane,this.dataset.board,this);}else if(event.key==='Escape'){closeAddCardForm(this.dataset.lane);}"
+		/>
+		<textarea id={ "new-card-body-" + laneName } placeholder="Description (optional, markdown)"></textarea>
+		<div class="label-pick-list">
+			for _, l := range labels {
+				if !isArchivedLabel(l) {
+					<label class="label-pick-item">
+						<input type="checkbox" name="labels" value={ l.ID }/>
+						<span
+							class="card-label label-pick-pill"
+							style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
+						>{ l.Name }</span>
+					</label>
+				}
+			}
+		</div>
+		<div class="form-row">
+			<button
+				class="btn btn-primary btn-sm"
+				onclick={ templ.ComponentScript{Call: "submitAddCard('" + laneName + "', '" + boardID + "', this)"} }
+			>Add Card</button>
+			<button class="btn btn-ghost btn-sm" onclick={ templ.ComponentScript{Call: "closeAddCardForm('" + laneName + "')"} }>Cancel</button>
+		</div>
+	</div>
+}
+
+templ CardItem(c *bankan.Card, labels []bankan.Label, boardID string, token string, isView bool, isReadonly bool) {
+	<div
+		class="card"
+		id={ "card-" + c.ID }
+		data-card-id={ c.ID }
+		data-board={ boardID }
+		style={ cardBorderStyle(c, labels) }
+		onclick={ templ.ComponentScript{Call: "openCardDetailModal(event, '" + c.ID + "', '" + boardID + "')"} }
+	>
+		<div class="card-title">{ c.Title }</div>
+		if c.Body != "" {
+			<hr class="card-title-sep"/>
+			<div class="card-desc-preview md-body md-body-preview">@templ.Raw(markdownPreviewHTML(c.Body))</div>
+		}
+		if c.PrimaryLabel != "" || len(c.Labels) > 0 {
+			<div class="card-meta">
+				if c.PrimaryLabel != "" {
+					<span
+						class="card-label card-label-primary"
+						style={ cardLabelStyle(labels, c.PrimaryLabel) }
+						title={ primaryLabelTitle(labels, c.PrimaryLabel) }
+					>{ labelName(labels, c.PrimaryLabel) }</span>
+				}
+				for _, lid := range sortedLabelIDs(c.Labels, labels) {
+					if lid != c.PrimaryLabel {
+						<span
+							class="card-label"
+							style={ cardLabelStyle(labels, lid) }
+							title={ cardLabelTitle(labels, lid) }
+						>{ labelName(labels, lid) }</span>
+					}
+				}
+			</div>
+		}
+		if !isReadonly {
+			<div class="card-controls">
+				if hasActiveLabels(labels) {
+					<div class="card-label-wrap" data-menu="true">
+						<button
+							class="card-label-btn"
+							onclick="toggleCardBoardLabelPicker(event, this)"
+							data-menu="true"
+							title="Assign labels"
+						>🏷️</button>
+						<div class="card-label-picker-menu" style="display:none">
+							for _, l := range labels {
+								if !isArchivedLabel(l) {
+									<label
+										class="label-pick-item"
+										data-card={ c.ID }
+										data-board={ boardID }
+										data-label={ l.ID }
+										onclick="onCardLabelClick(event, this)"
+										data-menu="true"
+									>
+										<input type="checkbox" checked?={ containsLabel(c.Labels, l.ID) }/>
+										<span
+											class="card-label label-pick-pill"
+											style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
+										>{ l.Name }</span>
+									</label>
+								}
+							}
+						</div>
+					</div>
+				}
+				<div class="dropdown">
+					<button
+						class="card-menu-btn"
+						onclick="toggleDropdown(this);event.stopPropagation()"
+						data-menu="true"
+					>···</button>
+					<div class="dropdown-menu">
+						<button
+							class="dropdown-item"
+							onclick={ templ.ComponentScript{Call: "openMoveCardModal('" + c.ID + "', '" + boardID + "')"} }
+							data-menu="true"
+						>→ Move</button>
+						<button
+							class="dropdown-item"
+							onclick={ templ.ComponentScript{Call: "openEditCardModal('" + c.ID + "', '" + boardID + "')"} }
+							data-menu="true"
+						>✎ Edit</button>
+						if !isView {
+							<button
+								class="dropdown-item"
+								onclick={ templ.ComponentScript{Call: "duplicateCard('" + c.ID + "', '" + boardID + "')"} }
+								data-menu="true"
+							>📋 Duplicate</button>
+						}
+						<div class="dropdown-sep"></div>
+						if isView {
+							<button
+								class="dropdown-item danger"
+								onclick={ templ.ComponentScript{Call: "archiveCard('" + c.ID + "', '" + boardID + "')"} }
+								data-menu="true"
+							>✕ Remove from view</button>
+						} else {
+							<button
+								class="dropdown-item"
+								onclick={ templ.ComponentScript{Call: "archiveCard('" + c.ID + "', '" + boardID + "')"} }
+								data-menu="true"
+							>📦 Archive</button>
+							<button
+								class="dropdown-item danger"
+								hx-delete={ "/ui/boards/" + boardID + "/cards/" + c.ID }
+								hx-confirm={ "Delete card '" + c.Title + "'? This cannot be undone." }
+								hx-target={ "#card-" + c.ID }
+								hx-swap="outerHTML"
+								hx-headers={ `{"X-Bankan-Token": "` + token + `"}` }
+								data-menu="true"
+							>🗑 Delete</button>
+						}
+					</div>
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// ArchivedCardItem renders a card that is currently in the archive.
+// It is read-only: no label picker, no action menu.
+// Clicking opens the read-only detail modal; an "Unarchive" button is shown inline.
+templ ArchivedCardItem(c *bankan.Card, labels []bankan.Label, boardID string) {
+	<div
+		class="card card-archived"
+		id={ "card-" + c.ID }
+		data-card-id={ c.ID }
+		data-board={ boardID }
+		onclick={ templ.ComponentScript{Call: "openCardDetailModal(event, '" + c.ID + "', '" + boardID + "')"} }
+		style="opacity:0.55;cursor:pointer"
+	>
+		<div class="card-title" style="text-decoration:line-through">{ c.Title }</div>
+		if len(c.Labels) > 0 {
+			<div class="card-meta">
+				for _, lid := range c.Labels {
+					<span
+						class="card-label"
+						style={ "border-color:" + labelColor(labels, lid) + ";color:" + labelColor(labels, lid) + ";background:rgba(" + colorToRGB(labelColor(labels, lid)) + ",0.12)" }
+					>{ labelName(labels, lid) }</span>
+				}
+			</div>
+		}
+		<div style="margin-top:6px">
+			<button
+				class="btn btn-ghost btn-sm"
+				style="font-size:11px;padding:2px 8px"
+				onclick={ templ.ComponentScript{Call: "openUnarchiveCardModal(event, '" + c.ID + "', '" + boardID + "')"} }
+				data-menu="true"
+			>↩ Unarchive</button>
+		</div>
+	</div>
+}
+
+// LaneCardsFragment renders only the cards in a lane (for HTMX partial updates).
+templ LaneCardsFragment(cards []*bankan.Card, labels []bankan.Label, boardID string, token string, laneName string, isView bool, isReadonly bool) {
+	if len(cards) == 0 {
+		<div class="empty-lane">No cards yet</div>
+	}
+	for _, c := range cards {
+		@CardItem(c, labels, boardID, token, isView, isReadonly)
+	}
+}
+
+// BoardViewFragment renders the full board view (for full board reloads).
+templ BoardViewFragment(data BoardPageData) {
+	<main
+		class="board-view"
+		id="board-view"
+		data-board={ data.CurrentBoard.ID }
+	>
+		for _, lc := range data.Lanes {
+			if lc.IsVirtual {
+				@ArchivedLaneSection(lc, data.Labels, data.CurrentBoard.ID, data.Token)
+			} else {
+				@Lane(lc, data.Labels, data.CurrentBoard.ID, data.Token, data.IsView, data.IsReadonly)
+			}
+		}
+		if !data.ShowArchived && !data.IsReadonly {
+			<div class="add-lane-col">
+				<button
+					class="btn-add-lane"
+					onclick="openAddLaneForm(this)"
+				>+ Add Lane</button>
+				@addLaneForm(data.CurrentBoard.ID, data.Token)
+			</div>
+		}
+	</main>
+}
+
+templ BoardSettingsModal(boardID string, currentColor string, token string) {
+	<div class="modal-backdrop" id="board-settings-modal" onclick="closeModalOnBackdrop(event,'board-settings-modal')">
+		<div class="modal" style="max-width:360px" onclick="event.stopPropagation()">
+			<div class="modal-header">
+				<span class="modal-title">Board settings</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				<div class="modal-section">
+					<div class="modal-section-title">Accent color</div>
+					<div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+						<div
+							id="bsetting-swatch"
+							style={ "width:28px;height:28px;border-radius:4px;border:1px solid #333;background:" + currentColor + ";flex-shrink:0;cursor:pointer" }
+							onclick="document.getElementById('bsetting-cpick').click()"
+						></div>
+						<input
+							type="color"
+							id="bsetting-cpick"
+							value={ currentColor }
+							style="display:none"
+							oninput="syncBoardColor(this.value)"
+						/>
+						<input
+							type="text"
+							id="bsetting-color-text"
+							value={ currentColor }
+							maxlength="7"
+							style="width:90px;font-family:monospace"
+							oninput="syncBoardColor(this.value)"
+						/>
+					</div>
+				</div>
+			</div>
+			<div class="form-row" style="padding:0 16px 16px">
+				<button class="btn btn-primary btn-sm" onclick={ templ.ComponentScript{Call: "submitBoardColor('" + boardID + "')"} }>Apply</button>
+				<button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Cancel</button>
+			</div>
+		</div>
+	</div>
+}
+
+// LabelPickerFragment renders the label-pick-list div for in-place refresh.
+templ LabelPickerFragment(labels []bankan.Label) {
+	<div class="label-pick-list">
+		for _, l := range labels {
+			if !isArchivedLabel(l) {
+				<label class="label-pick-item">
+					<input type="checkbox" name="labels" value={ l.ID }/>
+					<span
+						class="card-label label-pick-pill"
+						style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
+					>{ l.Name }</span>
+				</label>
+			}
+		}
+	</div>
+}
+
+// ArchiveViewBoardDialog renders the confirmation dialog for archiving a view board.
+templ ArchiveViewBoardDialog(boardID string, boardName string, filterLabelID string, filterLabelName string, token string) {
+	<div class="modal-backdrop" id="archive-vb-modal" onclick="closeModalOnBackdrop(event,'archive-vb-modal')">
+		<div class="modal" style="max-width:420px" onclick="event.stopPropagation()">
+			<div class="modal-header">
+				<span class="modal-title">Archive view board</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				<div class="modal-section">
+					<p>Archive <strong>{ boardName }</strong>?</p>
+					<p style="font-size:13px;color:var(--text-dim);margin-top:6px">
+						The board will become read-only and hidden from the tab bar.
+						Cards on the parent board are not affected.
+					</p>
+				</div>
+				if filterLabelName != "" {
+					<div class="modal-section">
+						<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+							<input type="checkbox" id="archive-vb-label-chk" style="margin-top:3px"/>
+							<span style="font-size:13px">
+								Also prefix filter label <strong>{ filterLabelName }</strong> with 💼
+								(marks it as belonging to an archived view board)
+							</span>
+						</label>
+					</div>
+				}
+			</div>
+			<div class="form-row" style="padding:0 16px 16px">
+				<button
+					class="btn btn-danger btn-sm"
+					onclick={ templ.ComponentScript{Call: "confirmArchiveViewBoard('" + boardID + "')"} }
+				>Archive</button>
+				<button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Cancel</button>
+			</div>
+		</div>
+	</div>
+}

@@ -1,0 +1,709 @@
+package ui
+
+import (
+	"fmt"
+	bankan "github.com/thekondor/bankan"
+)
+
+templ CardDetailModal(data CardDetailData) {
+	<div class="modal-backdrop" id="card-modal" data-card={ data.Card.ID } data-board={ data.BoardID } onclick="closeModalOnBackdrop(event)">
+		<div class="modal">
+			<div class="modal-header">
+				<div>
+					<div class="modal-title card-detail-title" id="modal-card-title">{ data.Card.Title }</div>
+					if data.Card.ArchivedAt != nil {
+						<div class="text-dim" style="font-size:11px;margin-top:4px">{ data.Card.ID } · 📦 archived from { data.Card.ArchivedFrom }</div>
+					} else {
+						<div class="text-dim" style="font-size:11px;margin-top:4px">{ data.Card.ID } · { data.Card.Lane }</div>
+					}
+				</div>
+				<div style="display:flex;align-items:center;gap:4px">
+					if data.Card.ArchivedAt == nil && !data.IsReadonly {
+						if data.IsView {
+							<button class="btn-icon" style="margin-right:12px" title="Remove from view" onclick={ templ.ComponentScript{Call: "archiveCard('" + data.Card.ID + "', '" + data.BoardID + "')"} }>🗑</button>
+						} else {
+							<button class="btn-icon" style="margin-right:12px" title="Archive card" onclick={ templ.ComponentScript{Call: "archiveCard('" + data.Card.ID + "', '" + data.BoardID + "')"} }>📦</button>
+						}
+					}
+					<button class="btn-icon" title="Copy link to card" onclick="copyCardLink()">🔗</button>
+					<button class="modal-close" onclick="closeModal()">✕</button>
+				</div>
+			</div>
+			<div class="modal-body">
+			if data.Card.Body != "" {
+				<div class="modal-section">
+					<div class="modal-section-title">Description</div>
+					<div class="card-detail-body md-body">@templ.Raw(renderMarkdownHTML(data.Card.Body))</div>
+				</div>
+			}
+				<div class="modal-section">
+					<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+						<span class="modal-section-title" style="margin-bottom:0">Labels</span>
+						if hasActiveLabels(data.Labels) && data.Card.ArchivedAt == nil {
+							<button class="btn-icon" title="Assign labels" onclick="toggleCardLabelPicker()">🏷️</button>
+						}
+					</div>
+					<div class="card-labels-list" id="card-assigned-labels">
+						if data.Card.PrimaryLabel == "" && len(data.Card.Labels) == 0 {
+							<span class="text-dim" style="font-size:12px">No labels</span>
+						}
+						if data.Card.PrimaryLabel != "" {
+							<span
+								class="card-label card-label-primary"
+								style={ cardLabelStyle(data.Labels, data.Card.PrimaryLabel) }
+								title={ primaryLabelTitle(data.Labels, data.Card.PrimaryLabel) }
+							>{ labelName(data.Labels, data.Card.PrimaryLabel) }</span>
+						}
+						for _, lid := range sortedLabelIDs(data.Card.Labels, data.Labels) {
+							if lid != data.Card.PrimaryLabel {
+								<span
+									class="card-label"
+									style={ cardLabelStyle(data.Labels, lid) }
+									title={ cardLabelTitle(data.Labels, lid) }
+								>{ labelName(data.Labels, lid) }</span>
+							}
+						}
+					</div>
+					if hasActiveLabels(data.Labels) && data.Card.ArchivedAt == nil {
+						<div
+							id="card-label-picker"
+							style="display:none;flex-wrap:wrap;gap:5px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"
+						>
+							for _, l := range data.Labels {
+								if !isArchivedLabel(l) {
+									<label
+										class="label-pick-item"
+										data-card={ data.Card.ID }
+										data-board={ data.BoardID }
+										data-label={ l.ID }
+										onclick="onCardLabelClick(event, this)"
+									>
+										<input type="checkbox" checked?={ containsLabel(data.Card.Labels, l.ID) }/>
+										<span
+											class="card-label label-pick-pill"
+											style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
+										>{ l.Name }</span>
+									</label>
+								}
+							}
+						</div>
+					}
+				</div>
+				<div class="modal-section">
+					<div class="modal-section-title">
+						Comments ({ fmt.Sprintf("%d", len(data.Comments)) })
+					</div>
+					<div class="comments-list" id="comments-list">
+						if len(data.Comments) == 0 {
+							<div class="text-dim" style="font-size:12px">No comments yet.</div>
+						}
+					for _, cm := range data.Comments {
+						@CommentItem(cm, data.IsReadonly)
+					}
+					</div>
+				if data.Card.ArchivedAt == nil && !data.IsReadonly {
+					<form
+						style="margin-top:10px;display:flex;flex-direction:column;gap:6px"
+						onsubmit="submitComment(event, this)"
+						data-board={ data.BoardID }
+						data-card={ data.Card.ID }
+						data-token={ data.Token }
+					>
+						<textarea name="body" placeholder="Add a comment…" style="min-height:60px"></textarea>
+						<input type="text" name="author" placeholder="Your name (optional)"/>
+						<button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-end">Post</button>
+					</form>
+				}
+				</div>
+				if data.Card.ArchivedAt != nil || !data.IsReadonly {
+				<div class="modal-section" style="margin-bottom:0">
+				<div style="display:flex;gap:8px;justify-content:flex-end">
+					if data.Card.ArchivedAt != nil {
+						<button
+							class="btn btn-primary btn-sm"
+							onclick={ templ.ComponentScript{Call: "openUnarchiveCardModal(event, '" + data.Card.ID + "', '" + data.BoardID + "')"} }
+						>↩ Unarchive</button>
+					} else if !data.IsReadonly {
+						<button
+							class="btn btn-ghost btn-sm"
+							onclick={ templ.ComponentScript{Call: "openEditCardModal('" + data.Card.ID + "', '" + data.BoardID + "')"} }
+						>✎ Edit</button>
+						<button
+							class="btn btn-ghost btn-sm"
+							onclick={ templ.ComponentScript{Call: "openMoveCardModal('" + data.Card.ID + "', '" + data.BoardID + "')"} }
+						>→ Move</button>
+					}
+				</div>
+				</div>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+templ CommentItem(cm bankan.Comment, isReadonly bool) {
+	<div class="comment" id={ "comment-" + cm.ID }>
+		<div class="comment-meta">
+			<span class="comment-author">{ cm.Author }</span>
+			<span>{ cm.CreatedAt.Format("2006-01-02 15:04") }</span>
+			<div style="margin-left:auto;display:flex;gap:4px">
+				<button
+					class="btn-icon"
+					style="font-size:11px"
+					title="Copy link to comment"
+					onclick={ templ.ComponentScript{Call: "copyCommentLink('" + cm.ID + "')"} }
+				>🔗</button>
+				if !isReadonly {
+					<button
+						class="btn-icon"
+						style="font-size:11px"
+						title="Edit comment"
+						onclick={ templ.ComponentScript{Call: "openEditComment('" + cm.ID + "')"} }
+					>✎</button>
+				}
+			</div>
+		</div>
+		<div class="comment-body md-body" id={ "comment-body-" + cm.ID }>@templ.Raw(renderMarkdownHTML(cm.Body))</div>
+		if !isReadonly {
+			<div id={ "comment-edit-" + cm.ID } style="display:none;margin-top:6px">
+				<textarea
+					id={ "comment-edit-textarea-" + cm.ID }
+					style="width:100%;min-height:60px;box-sizing:border-box"
+				>{ cm.Body }</textarea>
+				<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px">
+					<button class="btn btn-ghost btn-sm" onclick={ templ.ComponentScript{Call: "cancelEditComment('" + cm.ID + "')"} }>Cancel</button>
+					<button class="btn btn-primary btn-sm" onclick={ templ.ComponentScript{Call: "submitEditComment('" + cm.ID + "')"} }>Save</button>
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// CardNotInViewModal is shown when a card permalink from a view board is opened
+// but the card's stub has been removed from the view — yet the card still exists
+// on the parent board. It offers a direct link to the card on the parent board.
+templ CardNotInViewModal(cardID string, parentBoardID string, parentBoardName string) {
+	<div class="modal-backdrop" id="card-not-in-view-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:400px">
+			<div class="modal-header">
+				<span class="modal-title">Card not in this view</span>
+				<button class="modal-close" onclick="closeModal()">✕</button>
+			</div>
+			<div class="modal-body">
+				<p style="font-size:13px;margin-bottom:16px">
+					This card has been removed from the current view board but still exists on the parent board
+					<strong>{ parentBoardName }</strong>.
+				</p>
+				<div style="display:flex;gap:8px;justify-content:flex-end">
+					<button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button>
+					<a
+						class="btn btn-primary btn-sm"
+						href={ templ.SafeURL("/ui/boards/" + parentBoardID + "?card=" + cardID) }
+						onclick={ templ.ComponentScript{Call: "event.preventDefault(); navigatePreservingComment('/ui/boards/" + parentBoardID + "?card=" + cardID + "')"} }
+					>Open in parent board →</a>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+templ MoveCardModal(card *bankan.Card, boardID string, lanes []bankan.Lane, token string) {
+	<div class="modal-backdrop" id="move-card-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:360px">
+			<div class="modal-header">
+				<span class="modal-title">Move card</span>
+				<button class="modal-close" onclick="closeModal()">✕</button>
+			</div>
+			<div class="modal-body">
+				<p class="text-muted" style="margin-bottom:12px;font-size:13px">{ card.Title }</p>
+				<div style="display:flex;flex-direction:column;gap:8px">
+					for _, l := range lanes {
+						if l.Name != card.Lane {
+							<button
+								class="btn btn-ghost"
+								style="justify-content:flex-start"
+								onclick={ templ.ComponentScript{Call: "submitMoveCard(event, '" + card.ID + "', '" + boardID + "', '" + l.Name + "')"} }
+							>→ { l.Name }</button>
+						}
+					}
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// UnarchiveCardModal renders a lane-picker for restoring an archived card.
+// The user selects a lane; an HTMX POST is sent to restore the card and the
+// board view is swapped back, preserving show_archived state via HX-Current-URL.
+templ UnarchiveCardModal(card *bankan.Card, boardID string, lanes []bankan.Lane, token string) {
+	<div class="modal-backdrop" id="unarchive-card-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:360px">
+			<div class="modal-header">
+				<span class="modal-title">Restore card to lane</span>
+				<button class="modal-close" onclick="closeModal()">✕</button>
+			</div>
+			<div class="modal-body">
+				<p class="text-muted" style="margin-bottom:12px;font-size:13px">{ card.Title }</p>
+				<div style="display:flex;flex-direction:column;gap:8px">
+					for _, l := range lanes {
+						<button
+							class="btn btn-ghost"
+							style="justify-content:flex-start"
+							onclick={ templ.ComponentScript{Call: "submitRestoreCard(event, '" + card.ID + "', '" + boardID + "', '" + l.Name + "')"} }
+						>↩ { l.Name }</button>
+					}
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+templ EditCardModal(card *bankan.Card, boardID string, labels []bankan.Label, token string) {
+	<div class="modal-backdrop" id="edit-card-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:480px">
+			<div class="modal-header">
+				<span class="modal-title">Edit card</span>
+				<button class="modal-close" onclick="closeModal()">✕</button>
+			</div>
+			<div class="modal-body">
+				<form
+					style="display:flex;flex-direction:column;gap:10px"
+					onsubmit="submitEditCard(event, this)"
+					data-board={ boardID }
+					data-card={ card.ID }
+					data-token={ token }
+				>
+					<div>
+						<label>Title</label>
+						<input type="text" name="title" value={ card.Title } required/>
+					</div>
+				<div>
+					<div class="label-with-hint">
+						<label>Description</label>
+						<button type="button" class="btn-hint" onclick="openMarkdownHintsModal()" title="Markdown syntax help">?</button>
+					</div>
+					<textarea name="body">{ card.Body }</textarea>
+				</div>
+					if hasActiveLabels(labels) {
+						<div class="edit-labels-wrap">
+							<div style="flex:1">
+								<label>Labels</label>
+								<div class="edit-labels-list" style="margin-top:4px">
+									for _, l := range labels {
+										if !isArchivedLabel(l) {
+											<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+												<input type="checkbox" name="labels" value={ l.ID } checked?={ containsLabel(card.Labels, l.ID) }/>
+												<span
+													class="card-label label-draggable"
+													draggable="true"
+													data-label-id={ l.ID }
+													data-label-name={ l.Name }
+													data-label-color={ l.Color }
+													style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
+													ondragstart="onEditLabelDragStart(event,this)"
+												>{ l.Name }</span>
+											</label>
+										}
+									}
+								</div>
+							</div>
+							<div class="primary-label-col">
+								<label>Primary Label</label>
+								<div
+									class="primary-label-drop-zone"
+									id="primary-label-drop-zone"
+									ondragover="onPrimaryLabelDragOver(event)"
+									ondragleave="onPrimaryLabelDragLeave(event)"
+									ondrop="onPrimaryLabelDrop(event)"
+								>
+									if card.PrimaryLabel != "" {
+										<span
+											id="primary-label-display"
+											class="card-label card-label-primary"
+											style={ cardLabelStyle(labels, card.PrimaryLabel) }
+											title="Primary label"
+										>{ labelName(labels, card.PrimaryLabel) }</span>
+										<button type="button" class="btn-icon" id="clear-primary-label" onclick="clearPrimaryLabel()" title="Clear primary label" style="font-size:11px;padding:2px 5px">✕</button>
+									} else {
+										<span class="text-dim" id="primary-label-placeholder" style="font-size:11px;text-align:center;line-height:1.4">Drop<br/>label<br/>here</span>
+									}
+								</div>
+								<input type="hidden" name="primary_label" id="edit-primary-label-input" value={ card.PrimaryLabel }/>
+							</div>
+						</div>
+					}
+					<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+						<button type="button" class="btn btn-ghost btn-sm" onclick={ templ.ComponentScript{Call: "openCardDetailModal(null, '" + card.ID + "', '" + boardID + "')"} }>Cancel</button>
+						<button type="submit" class="btn btn-primary btn-sm">Save</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+func containsLabel(labels []string, id string) bool {
+	for _, l := range labels {
+		if l == id {
+			return true
+		}
+	}
+	return false
+}
+
+templ AddBoardModal(token string, regularBoards []BoardData, currentBoardID string) {
+	<div class="modal-backdrop" id="add-board-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:400px">
+			<div class="modal-header">
+				<span class="modal-title">New Board</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				<form
+					style="display:flex;flex-direction:column;gap:10px"
+					onsubmit="submitNewBoard(event, this)"
+					data-token={ token }
+				>
+					<div>
+						<label>Type</label>
+						<select name="board_type" id="new-board-type" onchange="onNewBoardTypeChange(this)" style="width:100%;margin-top:4px">
+							<option value="regular">Regular Board</option>
+							<option value="view">View Board</option>
+						</select>
+					</div>
+					<div>
+						<label>Name</label>
+						<input type="text" name="name" placeholder="my-project" required autocomplete="off"/>
+					</div>
+					<div id="view-board-fields" style="display:none;flex-direction:column;gap:10px">
+						<div>
+							<label>Parent Board</label>
+							<select name="parent_id" id="new-view-parent" onchange="onViewParentChange(this)" style="width:100%;margin-top:4px">
+								<option value="">Select a board…</option>
+								for _, b := range regularBoards {
+									if b.ID == currentBoardID {
+										<option value={ b.ID } selected>{ b.Name }</option>
+									} else {
+										<option value={ b.ID }>{ b.Name }</option>
+									}
+								}
+							</select>
+						</div>
+						<div>
+							<label>Filter Label</label>
+							<select name="filter_label_id" id="new-view-filter-label" style="width:100%;margin-top:4px">
+								<option value="">Select a label…</option>
+							</select>
+						</div>
+					</div>
+					<div style="display:flex;gap:8px;justify-content:flex-end">
+						<button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Cancel</button>
+						<button type="submit" class="btn btn-primary btn-sm">Create</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// ViewBoardFilterLabelOptions renders <option> elements for the filter label
+// <select> in the "New Board" modal. Loaded dynamically via JS when the parent
+// board is selected.
+templ ViewBoardFilterLabelOptions(labels []bankan.Label) {
+	if !hasActiveLabels(labels) {
+		<option value="" disabled>No labels on this board</option>
+	}
+	for _, l := range labels {
+		if !isArchivedLabel(l) {
+			<option value={ l.ID }>{ l.Name }</option>
+		}
+	}
+}
+
+templ ManageLabelsModal(boardID string, labels []bankan.Label, token string) {
+	<div class="modal-backdrop" id="manage-labels-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:500px">
+			<div class="modal-header">
+				<span class="modal-title">Manage Labels</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				if !hasActiveLabels(labels) && !hasArchivedLabels(labels) {
+					<p class="text-dim" style="font-size:13px;margin-bottom:16px">No labels yet.</p>
+				} else {
+					if hasActiveLabels(labels) {
+						<div class="lm-list">
+							for _, l := range labels {
+								if !isArchivedLabel(l) {
+									<div
+										class="lm-row"
+										data-label-id={ l.ID }
+										data-label-name={ l.Name }
+										data-label-color={ l.Color }
+										data-board={ boardID }
+									>
+										<div class="lm-row-main">
+											<div class="cpick-wrap">
+												<span
+													class="cpick-swatch"
+													style={ "background:" + l.Color }
+													title="Click to change color"
+													onclick="this.closest('.cpick-wrap').querySelector('.cpick-input').click()"
+												></span>
+												<input
+													type="color"
+													class="cpick-input"
+													value={ l.Color }
+													oninput="onLabelColorInput(this)"
+													onchange="onLabelColorChange(this)"
+												/>
+											</div>
+											<code class="lm-hex">{ l.Color }</code>
+											<span class="lm-name">{ l.Name }</span>
+											<div class="lm-actions">
+												<button
+													class="btn btn-ghost btn-sm"
+													onclick={ templ.ComponentScript{Call: "openRenameLabelForm('" + l.ID + "')"} }
+												>✎ Rename</button>
+												<button
+													class="btn btn-sm lm-btn-danger"
+													onclick={ templ.ComponentScript{Call: "submitDeleteLabel('" + boardID + "', '" + l.ID + "', '" + l.Name + "')"} }
+												>🗑</button>
+											</div>
+										</div>
+										<div id={ "rename-form-" + l.ID } class="lm-rename-form" style="display:none">
+											<input
+												type="text"
+												id={ "rename-name-" + l.ID }
+												value={ l.Name }
+												placeholder="Label name"
+												autocomplete="off"
+												style="flex:1;min-width:0"
+											/>
+											<input
+												type="text"
+												id={ "rename-color-" + l.ID }
+												value={ l.Color }
+												placeholder="#hex"
+												style="width:86px"
+												autocomplete="off"
+												oninput="syncRenameColorFromText(this)"
+											/>
+											<button
+												class="btn btn-primary btn-sm"
+												onclick={ templ.ComponentScript{Call: "submitRenameLabel('" + boardID + "', '" + l.ID + "')"} }
+											>Save</button>
+											<button
+												class="btn btn-ghost btn-sm"
+												onclick={ templ.ComponentScript{Call: "closeRenameLabelForm('" + l.ID + "')"} }
+											>✕</button>
+										</div>
+									</div>
+								}
+							}
+						</div>
+					}
+					if hasArchivedLabels(labels) {
+						<details style="margin-top:12px">
+							<summary style="cursor:pointer;font-size:13px;color:var(--text-dim);user-select:none;margin-bottom:8px">💼 Archived labels</summary>
+							<div class="lm-list" style="opacity:0.65">
+								for _, l := range labels {
+									if isArchivedLabel(l) {
+										<div
+											class="lm-row"
+											data-label-id={ l.ID }
+											data-label-name={ l.Name }
+											data-label-color={ l.Color }
+											data-board={ boardID }
+										>
+											<div class="lm-row-main">
+												<div class="cpick-wrap">
+													<span
+														class="cpick-swatch"
+														style={ "background:" + l.Color }
+													></span>
+												</div>
+												<code class="lm-hex">{ l.Color }</code>
+												<span class="lm-name">{ l.Name }</span>
+											</div>
+										</div>
+									}
+								}
+							</div>
+						</details>
+					}
+				}
+				<div class="lm-add-section">
+					<div class="modal-section-title">Add Label</div>
+					<form
+						class="lm-add-form"
+						onsubmit="submitAddLabelFromModal(event, this)"
+						data-board={ boardID }
+					>
+						<div class="lm-add-row">
+							<div class="cpick-wrap">
+								<span
+									id="new-label-swatch"
+									class="cpick-swatch"
+									style="background:#3b82f6"
+									title="Click to pick color"
+									onclick="document.getElementById('new-label-cpick').click()"
+								></span>
+								<input
+									type="color"
+									id="new-label-cpick"
+									value="#3b82f6"
+									class="cpick-input"
+									oninput="syncNewLabelColor(this.value)"
+									onchange="syncNewLabelColor(this.value)"
+								/>
+							</div>
+							<input
+								type="text"
+								name="name"
+								placeholder="Label name"
+								required
+								autocomplete="off"
+								style="flex:1;min-width:0"
+							/>
+							<input
+								type="text"
+								name="color"
+								id="new-label-color-text"
+								value="#3b82f6"
+								required
+								placeholder="#hex"
+								style="width:86px"
+								autocomplete="off"
+								oninput="syncNewLabelColorFromText(this.value)"
+							/>
+						</div>
+						<div style="display:flex;justify-content:flex-end;margin-top:8px">
+							<button type="submit" class="btn btn-primary btn-sm">Add Label</button>
+						</div>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+templ AddLabelModal(boardID string, token string) {
+	<div class="modal-backdrop" id="add-label-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:360px">
+			<div class="modal-header">
+				<span class="modal-title">Add Label</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				<form
+					style="display:flex;flex-direction:column;gap:10px"
+					hx-post={ "/ui/boards/" + boardID + "/labels" }
+					hx-target="#board-view"
+					hx-swap="outerHTML"
+					hx-headers={ `{"X-Bankan-Token":"` + token + `"}` }
+					onsubmit="document.getElementById('modal-target').innerHTML=''"
+				>
+					<div>
+						<label>Name</label>
+						<input type="text" name="name" placeholder="bug, feature…" required autocomplete="off"/>
+					</div>
+					<div>
+						<label>Color (hex)</label>
+						<input type="text" name="color" placeholder="#ef4444" value="#3b82f6" required/>
+					</div>
+					<div style="display:flex;gap:8px;justify-content:flex-end">
+						<button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Cancel</button>
+						<button type="submit" class="btn btn-primary btn-sm">Add</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// MarkdownHintsModal renders a static cheatsheet for the goldmark/GFM markdown
+// dialect supported for card descriptions. It is loaded into #modal-target via
+// openMarkdownHintsModal() in app.js.
+templ MarkdownHintsModal() {
+	<div class="modal-backdrop" id="md-hints-modal" onclick="closeModalOnBackdrop(event)">
+		<div class="modal" style="max-width:560px">
+			<div class="modal-header">
+				<span class="modal-title">Markdown syntax reference</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				<p class="text-dim" style="font-size:12px;margin-bottom:14px">Supported: CommonMark + GitHub Flavored Markdown (GFM). Raw HTML is stripped.</p>
+				<div class="md-hints-grid">
+					<div class="md-hints-col">
+						<div class="md-hints-section">
+							<div class="md-hints-heading">Text formatting</div>
+							<table class="md-hints-table">
+								<tr><td><code>**bold**</code></td><td><strong>bold</strong></td></tr>
+								<tr><td><code>*italic*</code></td><td><em>italic</em></td></tr>
+								<tr><td><code>~~strike~~</code></td><td><del>strike</del></td></tr>
+								<tr><td><code>`inline code`</code></td><td><code>inline code</code></td></tr>
+							</table>
+						</div>
+						<div class="md-hints-section">
+							<div class="md-hints-heading">Headings</div>
+							<table class="md-hints-table">
+								<tr><td><code># H1</code></td><td><span style="font-weight:700;font-size:1.1em">H1</span></td></tr>
+								<tr><td><code>## H2</code></td><td><span style="font-weight:600">H2</span></td></tr>
+								<tr><td><code>### H3</code></td><td><span style="font-weight:500">H3</span></td></tr>
+							</table>
+						</div>
+						<div class="md-hints-section">
+							<div class="md-hints-heading">Links &amp; images</div>
+							<table class="md-hints-table">
+								<tr><td><code>[text](url)</code></td><td>hyperlink</td></tr>
+								<tr><td><code>![alt](url)</code></td><td>image</td></tr>
+								<tr><td><code>https://example.com</code></td><td>auto-linked</td></tr>
+							</table>
+						</div>
+					</div>
+					<div class="md-hints-col">
+						<div class="md-hints-section">
+							<div class="md-hints-heading">Lists</div>
+							<table class="md-hints-table">
+								<tr><td><code>- item</code></td><td>unordered list</td></tr>
+								<tr><td><code>1. item</code></td><td>ordered list</td></tr>
+								<tr><td><code>- [x] done</code></td><td>task list (checked)</td></tr>
+								<tr><td><code>- [ ] todo</code></td><td>task list (open)</td></tr>
+							</table>
+						</div>
+						<div class="md-hints-section">
+							<div class="md-hints-heading">Blocks</div>
+							<table class="md-hints-table">
+								<tr><td><code>&gt; quote</code></td><td>blockquote</td></tr>
+								<tr><td><code>---</code></td><td>horizontal rule</td></tr>
+								<tr><td><code>```lang</code><br/><code>code</code><br/><code>```</code></td><td>fenced code block</td></tr>
+							</table>
+						</div>
+						<div class="md-hints-section">
+							<div class="md-hints-heading">Tables (GFM)</div>
+							<table class="md-hints-table">
+								<tr>
+									<td>
+										<code>| A | B |</code><br/>
+										<code>|---|---|</code><br/>
+										<code>| 1 | 2 |</code>
+									</td>
+									<td>
+										<table style="font-size:11px;border-collapse:collapse">
+											<tr><th style="border:1px solid var(--border);padding:1px 4px">A</th><th style="border:1px solid var(--border);padding:1px 4px">B</th></tr>
+											<tr><td style="border:1px solid var(--border);padding:1px 4px">1</td><td style="border:1px solid var(--border);padding:1px 4px">2</td></tr>
+										</table>
+									</td>
+								</tr>
+							</table>
+						</div>
+					</div>
+				</div>
+				<div style="display:flex;justify-content:flex-end;margin-top:16px">
+					<button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Close</button>
+				</div>
+			</div>
+		</div>
+	</div>
+}

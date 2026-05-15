@@ -1,0 +1,82 @@
+---
+name: bankan
+description: Read and mutate local kanban boards stored as markdown files. Use when the user asks about cards, lanes, boards, or tasks tracked in bankan.
+---
+
+## Basics
+
+`{{.Cmd}}` manages local kanban boards stored as plain markdown files.
+Board is auto-detected by walking up from cwd; use `--board <dir>` to target one explicitly.
+
+## Typical agent workflow
+
+1. `{{.Cmd}} lane list` — get exact lane names (case-sensitive).
+2. `{{.Cmd}} card list` — get 5-char card IDs (e.g. `ab12c`).
+3. Use IDs and exact lane names in subsequent commands.
+
+## Lane
+
+```
+{{.Cmd}} lane list
+{{.Cmd}} lane add <name>
+{{.Cmd}} lane rename <old-name> <new-name>
+{{.Cmd}} lane remove <name>               # lane must be empty
+```
+
+## Card
+
+```
+{{.Cmd}} card list [--lane <name>] [--label <id>] [--archived]
+{{.Cmd}} card show <id>                   # title, body, labels, comments
+{{.Cmd}} card add  --lane <name> --title "<title>" [--body "<body>"|--body -] [--label <id>]
+{{.Cmd}} card edit <id> [--title "<t>"] [--body "<b>"|--body -] [--add-label <id>] [--remove-label <id>]
+{{.Cmd}} card move <id> --lane <name>
+{{.Cmd}} card archive <id>
+{{.Cmd}} card restore <id> --lane <name>  # un-archive; destination lane required
+{{.Cmd}} card delete  <id> [--force]      # omit --force to preview; --force to confirm
+{{.Cmd}} card search  <id> [--root <dir>] [--include-archived] # find which board(s) contain a card by ID
+```
+
+## Comment
+
+```
+{{.Cmd}} comment list <card-id>                                    # also shows comment IDs
+{{.Cmd}} comment add  <card-id> --text "<text>"|--text - [--author "<name>"]
+{{.Cmd}} comment edit <comment-id> --card <card-id> --text "<text>"|--text -
+```
+
+## Label
+
+```
+{{.Cmd}} label list
+{{.Cmd}} label add    --name "<name>" [--color "<hex>"]
+{{.Cmd}} label edit   <id> [--name "<name>"] [--color "<hex>"]
+{{.Cmd}} label remove <id>
+```
+
+## Board
+
+```
+{{.Cmd}} board show                              # name, created date, label summary
+{{.Cmd}} board reorder --root <dir> <id1> ...   # set tab display order for all boards
+{{.Cmd}} board hide   <id> --root <dir>          # hide board from tab bar (preserves content)
+{{.Cmd}} board unhide <id> --root <dir>          # restore board to tab bar
+```
+
+`board reorder`, `board hide`, and `board unhide` require `--root`.
+
+## Stdin input (IMPORTANT for agents)
+
+Pass `-` as the value to read content from stdin until EOF — **always prefer this for multi-line bodies**:
+
+    echo "# Heading\n\nBody text." | {{.Cmd}} card add --lane <name> --title "<t>" --body -
+    echo "My comment"              | {{.Cmd}} comment add <card-id> --text -
+    cat description.md             | {{.Cmd}} card edit <id> --body -
+
+## Rules
+
+- Lane names are **case-sensitive** — always read from `lane list` before use.
+- `--label` (card add) and `--add-label`/`--remove-label` (card edit) take **label IDs**, not names — get IDs from `label list`.
+- Archived cards are hidden from `card list` by default; use `--archived` to see them.
+- `card delete` without `--force` only prints a preview — add `--force` to delete permanently.
+- `card search` scans all active boards (including view boards) under `--root` (default: cwd); archived view boards are skipped by default — use `--include-archived` to include them. Archived cards within active boards are not searched. Prints a warning when the same ID appears in multiple boards.

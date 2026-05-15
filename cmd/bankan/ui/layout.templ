@@ -1,0 +1,37 @@
+package ui
+
+templ Layout(title string, token string, accentColor string) {
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<meta name="bankan-token" content={ token }/>
+		<title>{ title } · bankan</title>
+		<link rel="stylesheet" href="/static/style.css"/>
+	</head>
+	<body>
+		if accentColor != "" {
+			@templ.Raw(boardThemeStyle(accentColor))
+		}
+		{ children... }
+		<div id="toast-area"></div>
+		<div id="modal-target"></div>
+		<script src="/static/htmx.min.js"></script>
+		<script src="/static/sortable.min.js"></script>
+		<script src="/static/app.js"></script>
+	</body>
+	</html>
+}
+
+templ Splash(token string) {
+	@Layout("bankan", token, "") {
+		<header class="site-header">
+			<a href="/" class="site-logo">⬛ bankan</a>
+		</header>
+		<div class="splash">
+			<p class="splash-title">No boards registered</p>
+			<p class="splash-sub">Start bankan serve with a board directory or container directory.</p>
+		</div>
+	}
+}

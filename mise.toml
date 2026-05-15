@@ -1,0 +1,43 @@
+[tools]
+go = "latest"
+"go:github.com/a-h/templ/cmd/templ" = "latest"
+
+[tasks.test]
+description = "Run all tests"
+run = "go test -count 1 ./..."
+
+[tasks.test-verbose]
+description = "Run all tests with verbose output"
+run = "go test -count 1 -v ./..."
+
+[tasks.build]
+description = "Build the bankan binary"
+run = "go build -o bankan ./cmd/bankan"
+
+[tasks.serve]
+description = "Run the bankan server against current dir (BOARD=<path> overrides)"
+run = "go run ./cmd/bankan serve --no-token ${BOARD:-.}"
+
+[tasks.cli]
+description = "Run the bankan CLI (pass ARGS to forward arguments)"
+run = "go run ./cmd/bankan ${ARGS}"
+
+[tasks.templ-gen]
+description = "Regenerate Go code from .templ files"
+run = "templ generate ./cmd/bankan/ui"
+
+[tasks.templ-watch]
+description = "Watch .templ files and regenerate on change"
+run = "templ generate --watch ./cmd/bankan/ui"
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run ./..."
+
+[tasks.demo-gen]
+description = "Populate demo/ with three sample boards (Website Redesign, Mobile App, Q3 Infra)"
+run = "bash scripts/demo-gen.sh"
+
+[tasks.demo-serve]
+description = "Serve the demo boards from demo/ (run demo-gen first)"
+run = "go run ./cmd/bankan serve --port 9091 demo/"
