@@ -109,6 +109,13 @@ func (r *Registry) InitViewBoard(name, parentID, filterLabelID string) (*bankan.
 	if _, err := r.Register(dir); err != nil {
 		return nil, fmt.Errorf("register view board after init: %w", err)
 	}
+	parent, err := bankan.ReadBoard(parentEntry.dir)
+	if err != nil {
+		return nil, fmt.Errorf("load parent for initial sync: %w", err)
+	}
+	if err := bankan.SyncViewBoard(vb, parent); err != nil {
+		return nil, fmt.Errorf("initial sync of view board %q: %w", name, err)
+	}
 	return vb, nil
 }
 

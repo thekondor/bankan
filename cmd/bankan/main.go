@@ -371,9 +371,15 @@ can be synced later with 'board view sync'.`,
 			if err != nil {
 				return err
 			}
+			parent, err := bankan.ParentBoard(vb)
+			if err != nil {
+				return fmt.Errorf("load parent for initial sync: %w", err)
+			}
+			if err := bankan.SyncViewBoard(vb, parent); err != nil {
+				return fmt.Errorf("initial sync: %w", err)
+			}
 			fmt.Printf("View board %q created at %s\n", vb.Name, vb.Dir)
 			fmt.Printf("Filter label: %s  Parent: %s\n", vb.FilterLabel, vb.Parent)
-			fmt.Println("Run 'bankan board view sync' to import existing matching cards.")
 			return nil
 		},
 	}

@@ -143,6 +143,11 @@ card_id: ab12c
 
 ## View board sync semantics
 
+**Initial sync on creation**: `Registry.InitViewBoard` (service layer) and the
+CLI `board view create` command both call `SyncViewBoard` automatically after
+the board is registered. The view is therefore pre-populated with all matching
+parent cards immediately — no manual sync step is needed after creation.
+
 Stubs **do not self-update** when a card moves in the parent board. A stub's
 lane position is updated only when `SyncViewBoard` is called explicitly (via
 `bankan board view sync --board <view>` or `POST /api/v1/boards/{id}/sync`).

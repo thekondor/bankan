@@ -335,7 +335,6 @@ func runViaRealCLI(t *testing.T) (boardSnap, viewBoardSnap) {
 		"--parent", boardDir,
 		"--label", labelIDs["Feature"],
 		"--name", "Feature Sprint")
-	run("board", "view", "sync", "--board", viewDir)
 
 	// ── Operations ────────────────────────────────────────────────────────
 
@@ -840,7 +839,6 @@ func runViewBoardArchiveViaRealCLI(t *testing.T) viewBoardArchiveSnap {
 
 	run("board", "view", "create", viewDir,
 		"--parent", boardDir, "--label", labelID, "--name", "Sprint View")
-	run("board", "view", "sync", "--board", viewDir)
 
 	run("board", "view", "archive", "--board", viewDir, "--archive-label")
 
@@ -934,16 +932,12 @@ func runViewBoardArchiveViaRealREST(t *testing.T) viewBoardArchiveSnap {
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
-	// Create + sync view board
+	// Create view board
 	res = restDo("POST", "/api/v1/view-boards", map[string]any{
 		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewID := decodeMap(res)["id"].(string)
-
-	res = restDo("POST", "/api/v1/boards/"+viewID+"/sync", nil)
-	require.Equal(t, http.StatusNoContent, res.StatusCode)
-	_ = res.Body.Close()
 
 	// Archive view board with archive_label=true
 	res = restDo("POST", "/api/v1/boards/"+viewID+"/archive",
@@ -1030,7 +1024,6 @@ func runCardReorderViaRealCLI(t *testing.T) (boardSnap, viewBoardSnap) {
 	addCard("Gamma", []string{labelID})
 
 	run("board", "view", "create", viewDir, "--parent", boardDir, "--label", labelID, "--name", "Sprint View")
-	run("board", "view", "sync", "--board", viewDir)
 
 	// Reorder Alpha (view index 0) to view index 2 using the view board.
 	run("card", "reorder", alphaID, "2", "--board", viewDir)
@@ -1131,16 +1124,12 @@ func runCardReorderViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	addCard("Beta", []string{labelID})
 	addCard("Gamma", []string{labelID})
 
-	// Create + sync view board.
+	// Create view board.
 	res = restDo("POST", "/api/v1/view-boards", map[string]any{
 		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewBoardID := decodeMap(res)["id"].(string)
-
-	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
-	require.Equal(t, http.StatusNoContent, res.StatusCode)
-	_ = res.Body.Close()
 
 	// Reorder Alpha (view index 0) to view index 2 via the view board endpoint.
 	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/reorder", viewBoardID, alphaID),
@@ -1708,7 +1697,6 @@ func runViewBoardStubRelocationViaRealCLI(t *testing.T) viewBoardSnap {
 
 	run("board", "view", "create", viewDir,
 		"--parent", boardDir, "--label", labelID, "--name", "Sprint View")
-	run("board", "view", "sync", "--board", viewDir)
 
 	// Move card in parent board directly (not via view).
 	run("card", "move", cardID, "--board", boardDir, "--lane", "doing")
@@ -1808,16 +1796,12 @@ func runViewBoardStubRelocationViaRealREST(t *testing.T) viewBoardSnap {
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	cardID := decodeMap(res)["id"].(string)
 
-	// Create + initial sync of view board.
+	// Create view board.
 	res = restDo("POST", "/api/v1/view-boards", map[string]any{
 		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewBoardID := decodeMap(res)["id"].(string)
-
-	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
-	require.Equal(t, http.StatusNoContent, res.StatusCode)
-	_ = res.Body.Close()
 
 	// Move card in parent board directly (not via view).
 	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/move", bid, cardID),
