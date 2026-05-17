@@ -291,6 +291,7 @@ body {
   transition: opacity var(--transition);
 }
 .card:hover .card-controls { opacity: 1; }
+.card-controls:has(.card-label-picker-menu[style*="flex"]) { opacity: 1; }
 
 .card-menu-btn {
   background: none;
@@ -320,18 +321,55 @@ body {
 }
 .card-label-btn:hover { background: var(--bg-btn); }
 .card-label-picker-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  background: var(--bg-modal);
-  border: 1px solid var(--border);
+  position: fixed;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border-card);
+  border-top: 2px solid var(--accent);
   border-radius: var(--radius);
   padding: 8px;
-  z-index: 300;
-  box-shadow: var(--shadow);
-  min-width: 140px;
-  flex-wrap: wrap;
-  gap: 5px;
+  z-index: 500;
+  box-shadow: 0 6px 20px rgba(0,0,0,.8);
+  min-width: 240px;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+.board-picker-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.board-picker-primary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border-left: 1px solid var(--border-card);
+  padding-left: 8px;
+  min-width: 90px;
+}
+.board-picker-primary-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.board-primary-drop-zone {
+  width: 100%;
+  min-height: 50px;
+  border: 2px dashed var(--border-card);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 4px;
+  transition: border-color var(--transition), background var(--transition);
+}
+.board-primary-drop-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(74,222,128,0.07);
 }
 
 /* ── Add lane button ─────────────────────────────────────────────────────── */

@@ -467,7 +467,7 @@ templ ManageLabelsModal(boardID string, labels []bankan.Label, token string) {
 												>✎ Rename</button>
 												<button
 													class="btn btn-sm lm-btn-danger"
-													onclick={ templ.ComponentScript{Call: "submitDeleteLabel('" + boardID + "', '" + l.ID + "', '" + l.Name + "')"} }
+													onclick={ templ.ComponentScript{Call: "openDeleteLabelDialog('" + boardID + "', '" + l.ID + "')"} }
 												>🗑</button>
 											</div>
 										</div>

@@ -173,7 +173,10 @@ func collectViewStubIDs(vb *ViewBoard) (map[string]struct{}, error) {
 //     matching view lane (by lane name). If the card's parent lane doesn't exist
 //     in the view, the stub is placed in the first view lane; if there are no
 //     view lanes, it is skipped (a warning-level situation callers may handle).
-//  3. Removes stubs whose card no longer carries the FilterLabel (orphan cleanup).
+//  3. Relocates existing stubs whose parent card has moved to a different lane.
+//     If the parent's new lane has a matching view lane, the stub is moved there.
+//     If there is no matching view lane, the stub stays where it is.
+//  4. Removes stubs whose card no longer carries the FilterLabel (orphan cleanup).
 func SyncViewBoard(vb *ViewBoard, parent *Board) error {
 	// Build set of parent cards that carry the filter label.
 	parentCards, err := allParentCardsWithLabel(parent, vb.FilterLabel)
@@ -183,6 +186,12 @@ func SyncViewBoard(vb *ViewBoard, parent *Board) error {
 	wantIDs := make(map[string]struct{}, len(parentCards))
 	for _, c := range parentCards {
 		wantIDs[c.ID] = struct{}{}
+	}
+
+	// Index parent cards by ID for fast lane lookups during stub relocation.
+	parentByID := make(map[string]*Card, len(parentCards))
+	for _, c := range parentCards {
+		parentByID[c.ID] = c
 	}
 
 	// Build current stub state.
@@ -219,6 +228,32 @@ func SyncViewBoard(vb *ViewBoard, parent *Board) error {
 		}
 		if _, err := writeViewCardStub(targetLane.Dir, c.ID, slug, order); err != nil {
 			return fmt.Errorf("sync view board: create stub for card %q: %w", c.ID, err)
+		}
+	}
+
+	// Relocate stubs whose parent card has moved to a different lane.
+	// Only wanted stubs are considered; orphans are handled by the removal pass.
+	// If the parent's current lane has no matching view lane, the stub stays put.
+	for _, lane := range viewLanes {
+		stubs, err := ListViewCardStubs(lane)
+		if err != nil {
+			return fmt.Errorf("sync view board: list stubs in lane %q: %w", lane.Name, err)
+		}
+		for _, s := range stubs {
+			if _, want := wantIDs[s.CardID]; !want {
+				continue
+			}
+			parentCard := parentByID[s.CardID]
+			targetLane, ok := LaneByName(viewLanes, parentCard.Lane)
+			if !ok {
+				continue // parent lane not mirrored in view — leave stub where it is
+			}
+			if s.Lane == targetLane.Name {
+				continue // already in the right lane
+			}
+			if err := moveStub(s, targetLane); err != nil {
+				return fmt.Errorf("sync view board: relocate stub for card %q: %w", s.CardID, err)
+			}
 		}
 	}
 

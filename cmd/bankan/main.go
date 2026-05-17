@@ -1316,27 +1316,36 @@ func newLabelEditCmd() *cobra.Command {
 
 func newLabelRemoveCmd() *cobra.Command {
 	var boardDir string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "remove <id>",
-		Short: "Remove a label from the board",
-		Args:  cobra.ExactArgs(1),
+		Short: "Archive a label (default) or permanently delete it (--force)",
+		Long: `By default the label is archived: it is prefixed with "` + "💼" + `" so it
+remains visible on existing cards but is excluded from pickers.
+Use --force to permanently delete the label instead.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reg, id, err := resolveReg(boardDir)
 			if err != nil {
 				return err
 			}
-			if err := reg.RemoveLabel(id, args[0]); err != nil {
+			if err := reg.RemoveLabel(id, args[0], force); err != nil {
 				return err
 			}
 			suffix := ""
 			if reg.IsViewBoard(id) {
 				suffix = " from parent board"
 			}
-			fmt.Printf("Label %s removed%s.\n", args[0], suffix)
+			if force {
+				fmt.Printf("Label %s removed%s.\n", args[0], suffix)
+			} else {
+				fmt.Printf("Label %s archived%s.\n", args[0], suffix)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&boardDir, "board", "", "Path to board directory")
+	cmd.Flags().BoolVar(&force, "force", false, "Permanently delete instead of archiving")
 	return cmd
 }
 

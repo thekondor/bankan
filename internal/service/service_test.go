@@ -416,17 +416,31 @@ func TestRegistry_UpdateLabel(t *testing.T) {
 	assert.Equal(t, "#f97316", updated.Color)
 }
 
-func TestRegistry_RemoveLabel(t *testing.T) {
+func TestRegistry_RemoveLabel_Force(t *testing.T) {
 	_, reg, id := setupBoard(t)
 	lbl, err := reg.AddLabel(id, "Tag", "#3b82f6")
 	require.NoError(t, err)
 
-	err = reg.RemoveLabel(id, lbl.ID)
+	err = reg.RemoveLabel(id, lbl.ID, true)
 	require.NoError(t, err)
 
 	labels, err := reg.ListLabels(id)
 	require.NoError(t, err)
 	assert.Empty(t, labels)
+}
+
+func TestRegistry_RemoveLabel_DefaultArchives(t *testing.T) {
+	_, reg, id := setupBoard(t)
+	lbl, err := reg.AddLabel(id, "Tag", "#3b82f6")
+	require.NoError(t, err)
+
+	err = reg.RemoveLabel(id, lbl.ID, false)
+	require.NoError(t, err)
+
+	labels, err := reg.ListLabels(id)
+	require.NoError(t, err)
+	require.Len(t, labels, 1)
+	assert.Equal(t, bankan.ArchivedLabelPrefix+"Tag", labels[0].Name)
 }
 
 func TestRegistry_AddLabel_ViewBoard_Forbidden(t *testing.T) {
@@ -480,7 +494,7 @@ func TestRegistry_ViewBoard_RestoreCard_Forbidden(t *testing.T) {
 
 func TestRegistry_ViewBoard_RemoveFilterLabel_Forbidden(t *testing.T) {
 	_, _, reg, _, viewID, lbl := setupViewBoard(t)
-	err := reg.RemoveLabel(viewID, lbl.ID)
+	err := reg.RemoveLabel(viewID, lbl.ID, true)
 	var forbidden *service.ErrForbidden
 	assert.True(t, errors.As(err, &forbidden))
 }
@@ -1030,4 +1044,52 @@ func TestSearchCard_IncludesArchivedViewBoardWithFlag(t *testing.T) {
 		boardIDs[i] = r.BoardID
 	}
 	assert.Contains(t, boardIDs, viewID, "archived view board must be included when flag is set")
+}
+
+func TestRegistry_IsLabelUsed_NotUsed(t *testing.T) {
+	_, reg, id := setupBoard(t)
+	lbl, err := reg.AddLabel(id, "Bug", "#ef4444")
+	require.NoError(t, err)
+
+	used, err := reg.IsLabelUsed(id, lbl.ID)
+	require.NoError(t, err)
+	assert.False(t, used)
+}
+
+func TestRegistry_IsLabelUsed_UsedInCard(t *testing.T) {
+	_, reg, id, lane := setupBoardWithLane(t)
+	lbl, err := reg.AddLabel(id, "Bug", "#ef4444")
+	require.NoError(t, err)
+	_, err = reg.AddCard(id, lane.Name, "Task", "", []string{lbl.ID})
+	require.NoError(t, err)
+
+	used, err := reg.IsLabelUsed(id, lbl.ID)
+	require.NoError(t, err)
+	assert.True(t, used)
+}
+
+func TestRegistry_ArchiveLabel(t *testing.T) {
+	_, reg, id := setupBoard(t)
+	lbl, err := reg.AddLabel(id, "Bug", "#ef4444")
+	require.NoError(t, err)
+
+	require.NoError(t, reg.ArchiveLabel(id, lbl.ID))
+
+	labels, err := reg.ListLabels(id)
+	require.NoError(t, err)
+	var found bankan.Label
+	for _, l := range labels {
+		if l.ID == lbl.ID {
+			found = l
+		}
+	}
+	assert.Equal(t, bankan.ArchivedLabelPrefix+"Bug", found.Name)
+}
+
+func TestRegistry_ArchiveLabel_NotFound(t *testing.T) {
+	_, reg, id := setupBoard(t)
+	err := reg.ArchiveLabel(id, "nonexistent")
+	require.Error(t, err)
+	var notFound *service.ErrNotFound
+	assert.True(t, errors.As(err, &notFound))
 }

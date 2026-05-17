@@ -206,13 +206,31 @@ function submitAddCard(laneName, boardID, btn) {
 }
 
 // ── Card board-view label picker ──────────────────────────────────────────
+let _boardPickerCoords = null;
+
 function toggleCardBoardLabelPicker(event, btn) {
   event.stopPropagation();
   const menu = btn.nextElementSibling;
   const wasOpen = menu.style.display !== 'none';
   closeAllCardLabelPickers();
   closeAllDropdowns();
-  if (!wasOpen) menu.style.display = 'flex';
+  if (!wasOpen) {
+    const rect = btn.getBoundingClientRect();
+    _boardPickerCoords = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+    _showBoardPicker(menu);
+  } else {
+    _boardPickerCoords = null;
+  }
+}
+
+function _showBoardPicker(menu) {
+  if (!_boardPickerCoords) return;
+  // Reset checkbox states to what the server rendered, overriding any browser
+  // form-state restoration that may have applied stale checked values.
+  menu.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = cb.defaultChecked; });
+  menu.style.top   = _boardPickerCoords.top   + 'px';
+  menu.style.right = _boardPickerCoords.right + 'px';
+  menu.style.display = 'flex';
 }
 
 // ── Archive card ──────────────────────────────────────────────────────────
@@ -350,7 +368,7 @@ function onCardLabelClick(event, el) {
       const newBoardCard = document.getElementById('card-' + cardID);
       if (newBoardCard) {
         const boardPicker = newBoardCard.querySelector('.card-label-picker-menu');
-        if (boardPicker) boardPicker.style.display = 'flex';
+        if (boardPicker) _showBoardPicker(boardPicker);
       }
     }
     // If the card detail modal is open, re-fetch it and keep its picker open too.
@@ -621,6 +639,19 @@ function updateLabelsCountBtn(delta) {
   btn.textContent = `Labels (${next})`;
 }
 
+// Reloads card items for all visible lanes to reflect label changes in the
+// per-card label picker menus (.card-label-picker-menu).
+function refreshAllLaneCards(boardID) {
+  document.querySelectorAll('.lane-cards[data-lane]').forEach(function(el) {
+    var laneName = el.dataset.lane;
+    fetch('/ui/boards/' + boardID + '/lanes/' + encodeURIComponent(laneName) + '/cards', {
+      headers: { 'X-Bankan-Token': getToken() }
+    }).then(function(r) { return r.text(); }).then(function(html) {
+      el.innerHTML = html;
+    }).catch(function() {});
+  });
+}
+
 // Fetches fresh label-picker HTML from the server and updates every
 // .label-pick-list in the board (i.e. every add-card inline form).
 function refreshLabelPickers(boardID) {
@@ -704,24 +735,43 @@ function submitRenameLabel(boardID, labelID) {
     return r.text();
   }).then(html => {
     document.getElementById('modal-target').innerHTML = html;
+    refreshLabelPickers(boardID);
+    refreshAllLaneCards(boardID);
     initNewLabelColor();
   }).catch(e => showToast(e.message, 'error'));
 }
 
-function submitDeleteLabel(boardID, labelID, labelName) {
-  if (!confirm(`Delete label "${labelName}"? Cards using this label will lose it.`)) return;
-  fetch(`/ui/boards/${boardID}/labels/${labelID}`, {
-    method: 'DELETE',
+function openDeleteLabelDialog(boardID, labelID) {
+  fetch(`/ui/modals/delete-label/${boardID}/${labelID}`, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => {
     if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
     return r.text();
   }).then(html => {
     document.getElementById('modal-target').innerHTML = html;
-    updateLabelsCountBtn(-1);
-    refreshLabelPickers(boardID);
-    initNewLabelColor();
   }).catch(e => showToast(e.message, 'error'));
+}
+
+function confirmDeleteLabel(boardID, labelID) {
+  const chk = document.getElementById('delete-label-archive-chk');
+  const archive = chk ? chk.checked : false;
+  const url    = archive
+    ? `/ui/boards/${boardID}/labels/${labelID}/archive`
+    : `/ui/boards/${boardID}/labels/${labelID}`;
+  const method = archive ? 'POST' : 'DELETE';
+  fetch(url, { method, headers: { 'X-Bankan-Token': getToken() } })
+    .then(r => {
+      if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
+      return r.text();
+    })
+    .then(html => {
+      document.getElementById('modal-target').innerHTML = html;
+      if (!archive) updateLabelsCountBtn(-1);
+      refreshLabelPickers(boardID);
+      refreshAllLaneCards(boardID);
+      initNewLabelColor();
+    })
+    .catch(e => showToast(e.message, 'error'));
 }
 
 function submitAddLabelFromModal(event, form) {
@@ -746,6 +796,7 @@ function submitAddLabelFromModal(event, form) {
     document.getElementById('modal-target').innerHTML = html;
     updateLabelsCountBtn(+1);
     refreshLabelPickers(boardID);
+    refreshAllLaneCards(boardID);
     initNewLabelColor();
   }).catch(e => showToast(e.message, 'error'));
 }
@@ -1023,6 +1074,68 @@ function _escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Board card picker: primary label drag-and-drop ───────────────────────
+function onBoardLabelDragStart(event, el) {
+  event.stopPropagation();
+  event.dataTransfer.setData('text/plain', JSON.stringify({
+    id: el.dataset.labelId,
+    name: el.dataset.labelName,
+    color: el.dataset.labelColor
+  }));
+  event.dataTransfer.effectAllowed = 'copy';
+}
+
+function onBoardPrimaryLabelDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  event.currentTarget.classList.add('drag-over');
+}
+
+function onBoardPrimaryLabelDragLeave(event) {
+  event.currentTarget.classList.remove('drag-over');
+}
+
+function onBoardPrimaryLabelDrop(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const zone = event.currentTarget;
+  zone.classList.remove('drag-over');
+  let data;
+  try { data = JSON.parse(event.dataTransfer.getData('text/plain')); } catch (_) { return; }
+  if (!data || !data.id) return;
+  const oldPrimary = zone.dataset.primaryLabel || '';
+  _updateBoardCardPrimaryLabel(zone.dataset.card, zone.dataset.board, data.id, oldPrimary);
+}
+
+function clearBoardPrimaryLabel(btn) {
+  const zone = btn.closest('.board-primary-drop-zone');
+  if (!zone) return;
+  _updateBoardCardPrimaryLabel(zone.dataset.card, zone.dataset.board, '', zone.dataset.primaryLabel || '');
+}
+
+function _updateBoardCardPrimaryLabel(cardID, boardID, labelID, oldPrimaryID) {
+  const payload = { primary_label: labelID };
+  if (oldPrimaryID && oldPrimaryID !== labelID) {
+    payload.remove_labels = [oldPrimaryID];
+  }
+  fetch(`/ui/boards/${boardID}/cards/${cardID}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
+    body: JSON.stringify(payload)
+  }).then(r => {
+    if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
+    return r.text();
+  }).then(cardHtml => {
+    const boardCard = document.getElementById('card-' + cardID);
+    if (boardCard) boardCard.outerHTML = cardHtml;
+    const newCard = document.getElementById('card-' + cardID);
+    if (newCard) {
+      const picker = newCard.querySelector('.card-label-picker-menu');
+      if (picker) _showBoardPicker(picker);
+    }
+  }).catch(e => showToast(e.message, 'error'));
+}
+
 // ── Board reload ──────────────────────────────────────────────────────────
 function reloadBoard(boardID) {
   const savedScrollLeft = document.getElementById('board-view')?.scrollLeft ?? 0;
@@ -1057,6 +1170,8 @@ function initSortable() {
       group: 'cards',
       animation: 150,
       ghostClass: 'sortable-ghost',
+      filter: '.label-draggable',
+      preventOnFilter: false,
       onEnd: function(evt) {
         const cardID  = evt.item.dataset.cardId;
         const boardID = evt.item.dataset.board;

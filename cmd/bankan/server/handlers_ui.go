@@ -687,7 +687,7 @@ func (s *Server) handleUILabelPicker(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUIDeleteLabel(w http.ResponseWriter, r *http.Request) {
 	id      := boardID(r)
 	labelID := r.PathValue("labelId")
-	if err := s.reg.RemoveLabel(id, labelID); err != nil {
+	if err := s.reg.RemoveLabel(id, labelID, true); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -712,6 +712,44 @@ func (s *Server) handleUIRenameLabel(w http.ResponseWriter, r *http.Request) {
 		Name:  req.Name,
 		Color: req.Color,
 	}); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	labels, _ := s.reg.ListLabels(id)
+	w.Header().Set("Content-Type", "text/html")
+	_ = ui.ManageLabelsModal(id, labels, s.token).Render(r.Context(), w)
+}
+
+// GET /ui/modals/delete-label/{boardId}/{labelId}
+// Returns the delete-label confirmation dialog as an HTML fragment.
+func (s *Server) handleUIDeleteLabelDialog(w http.ResponseWriter, r *http.Request) {
+	bID := r.PathValue("boardId")
+	labelID := r.PathValue("labelId")
+	labels, err := s.reg.ListLabels(bID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	lbl, ok := bankan.FindLabelByID(labels, labelID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "label not found")
+		return
+	}
+	isUsed, err := s.reg.IsLabelUsed(bID, labelID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	_ = ui.DeleteLabelDialog(bID, labelID, lbl.Name, isUsed, s.token).Render(r.Context(), w)
+}
+
+// POST /ui/boards/{id}/labels/{labelId}/archive
+// Archives (prefixes with 💼) a label and returns the updated manage-labels modal.
+func (s *Server) handleUIArchiveLabel(w http.ResponseWriter, r *http.Request) {
+	id := boardID(r)
+	labelID := r.PathValue("labelId")
+	if err := s.reg.ArchiveLabel(id, labelID); err != nil {
 		writeServiceError(w, err)
 		return
 	}

@@ -1638,7 +1638,7 @@ func ManageLabelsModal(boardID string, labels []bankan.Label, token string) temp
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templ.RenderScriptItems(ctx, templ_7745c5c3_Buffer, templ.ComponentScript{Call: "submitDeleteLabel('" + boardID + "', '" + l.ID + "', '" + l.Name + "')"})
+						templ_7745c5c3_Err = templ.RenderScriptItems(ctx, templ_7745c5c3_Buffer, templ.ComponentScript{Call: "openDeleteLabelDialog('" + boardID + "', '" + l.ID + "')"})
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -1646,7 +1646,7 @@ func ManageLabelsModal(boardID string, labels []bankan.Label, token string) temp
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						var templ_7745c5c3_Var88 templ.ComponentScript = templ.ComponentScript{Call: "submitDeleteLabel('" + boardID + "', '" + l.ID + "', '" + l.Name + "')"}
+						var templ_7745c5c3_Var88 templ.ComponentScript = templ.ComponentScript{Call: "openDeleteLabelDialog('" + boardID + "', '" + l.ID + "')"}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var88.Call)
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err

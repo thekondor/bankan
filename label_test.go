@@ -82,3 +82,72 @@ func TestFindLabelByName(t *testing.T) {
 	_, ok = FindLabelByName(labels, "missing")
 	assert.False(t, ok)
 }
+
+func TestIsLabelUsedInBoard_NotUsed(t *testing.T) {
+	b := newTestBoard(t)
+	label := Label{ID: "lbl01", Name: "Bug", Color: "#ef4444"}
+	require.NoError(t, AddLabel(b, label))
+
+	used, err := IsLabelUsedInBoard(b, "lbl01")
+	require.NoError(t, err)
+	assert.False(t, used)
+}
+
+func TestIsLabelUsedInBoard_UsedInActiveLane(t *testing.T) {
+	b, lane := boardWithLane(t)
+	label := Label{ID: "lbl01", Name: "Bug", Color: "#ef4444"}
+	require.NoError(t, AddLabel(b, label))
+
+	c := addTestCard(t, b, lane, "my card")
+	c.Labels = []string{"lbl01"}
+	require.NoError(t, WriteCard(c))
+
+	used, err := IsLabelUsedInBoard(b, "lbl01")
+	require.NoError(t, err)
+	assert.True(t, used)
+}
+
+func TestIsLabelUsedInBoard_UsedAsPrimaryLabel(t *testing.T) {
+	b, lane := boardWithLane(t)
+	label := Label{ID: "lbl01", Name: "Bug", Color: "#ef4444"}
+	require.NoError(t, AddLabel(b, label))
+
+	c := addTestCard(t, b, lane, "my card")
+	c.PrimaryLabel = "lbl01"
+	require.NoError(t, WriteCard(c))
+
+	used, err := IsLabelUsedInBoard(b, "lbl01")
+	require.NoError(t, err)
+	assert.True(t, used)
+}
+
+func TestIsLabelUsedInBoard_UsedInArchive(t *testing.T) {
+	b, lane := boardWithLane(t)
+	label := Label{ID: "lbl01", Name: "Bug", Color: "#ef4444"}
+	require.NoError(t, AddLabel(b, label))
+
+	c := addTestCard(t, b, lane, "my card")
+	c.Labels = []string{"lbl01"}
+	require.NoError(t, WriteCard(c))
+	require.NoError(t, ArchiveCard(b, c))
+
+	used, err := IsLabelUsedInBoard(b, "lbl01")
+	require.NoError(t, err)
+	assert.True(t, used)
+}
+
+func TestIsLabelUsedInBoard_OtherLabelNotCounted(t *testing.T) {
+	b, lane := boardWithLane(t)
+	label1 := Label{ID: "lbl01", Name: "Bug", Color: "#ef4444"}
+	label2 := Label{ID: "lbl02", Name: "Feature", Color: "#3b82f6"}
+	require.NoError(t, AddLabel(b, label1))
+	require.NoError(t, AddLabel(b, label2))
+
+	c := addTestCard(t, b, lane, "my card")
+	c.Labels = []string{"lbl02"}
+	require.NoError(t, WriteCard(c))
+
+	used, err := IsLabelUsedInBoard(b, "lbl01")
+	require.NoError(t, err)
+	assert.False(t, used)
+}

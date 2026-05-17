@@ -463,3 +463,87 @@ func TestReorderViewCard_ViewOnlyLane_NoParentChange(t *testing.T) {
 	assert.Equal(t, c2.ID, stubs[0].CardID)
 	assert.Equal(t, c1.ID, stubs[1].CardID)
 }
+
+func TestSyncViewBoard_RelocatesStubWhenParentCardMoves(t *testing.T) {
+	parent := newTestBoard(t)
+	lbl := Label{ID: "sp1a", Name: "Sprint", Color: "#0000ff"}
+	require.NoError(t, AddLabel(parent, lbl))
+	pBacklog, err := AddLane(parent, "Backlog")
+	require.NoError(t, err)
+	pDoing, err := AddLane(parent, "Doing")
+	require.NoError(t, err)
+
+	c, err := AddCard(parent, pBacklog, "Move Me", "", []string{lbl.ID})
+	require.NoError(t, err)
+
+	viewDir := filepath.Join(t.TempDir(), "view")
+	vb, err := InitViewBoard(viewDir, "Sprint View", parent.Dir, lbl.ID)
+	require.NoError(t, err)
+
+	// First sync: stub lands in Backlog.
+	require.NoError(t, SyncViewBoard(vb, parent))
+	_, stubLane, err := FindViewCardStub(vb, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "backlog", stubLane.Name)
+
+	// Move the card in the parent board (simulates a CLI move).
+	require.NoError(t, MoveCard(parent, c, pDoing))
+
+	// Second sync: stub must follow the card to Doing.
+	require.NoError(t, SyncViewBoard(vb, parent))
+	_, stubLane, err = FindViewCardStub(vb, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "doing", stubLane.Name)
+
+	// No stub duplication.
+	viewLanes, err := ReadLanes(vb.Dir)
+	require.NoError(t, err)
+	var total int
+	for _, l := range viewLanes {
+		stubs, err := ListViewCardStubs(l)
+		require.NoError(t, err)
+		total += len(stubs)
+	}
+	assert.Equal(t, 1, total)
+}
+
+func TestSyncViewBoard_StubStaysWhenParentLaneNotInView(t *testing.T) {
+	parent := newTestBoard(t)
+	lbl := Label{ID: "sp2b", Name: "Sprint2", Color: "#ff0000"}
+	require.NoError(t, AddLabel(parent, lbl))
+	pBacklog, err := AddLane(parent, "Backlog")
+	require.NoError(t, err)
+	pHidden, err := AddLane(parent, "Hidden Lane")
+	require.NoError(t, err)
+
+	c, err := AddCard(parent, pBacklog, "Stuck Card", "", []string{lbl.ID})
+	require.NoError(t, err)
+
+	viewDir := filepath.Join(t.TempDir(), "view")
+	vb, err := InitViewBoard(viewDir, "Sprint View", parent.Dir, lbl.ID)
+	require.NoError(t, err)
+
+	// Remove Hidden Lane from view (keep only Backlog).
+	viewLanes, err := ReadLanes(vb.Dir)
+	require.NoError(t, err)
+	for _, l := range viewLanes {
+		if l.Name != "backlog" {
+			require.NoError(t, os.Remove(l.Dir))
+		}
+	}
+
+	// Sync: stub created in Backlog.
+	require.NoError(t, SyncViewBoard(vb, parent))
+	_, stubLane, err := FindViewCardStub(vb, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "backlog", stubLane.Name)
+
+	// Move card in parent to Hidden Lane (not in view).
+	require.NoError(t, MoveCard(parent, c, pHidden))
+
+	// Re-sync: stub must remain in Backlog.
+	require.NoError(t, SyncViewBoard(vb, parent))
+	_, stubLane, err = FindViewCardStub(vb, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "backlog", stubLane.Name)
+}

@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// ArchivedLabelPrefix is prepended to a label name to mark it as archived.
+// An archived label is hidden from pickers but not deleted.
+const ArchivedLabelPrefix = "💼 "
+
 // Label is a tag that can be assigned to cards within a board.
 // Labels are unique per board by both ID and Name.
 type Label struct {
@@ -74,4 +78,44 @@ func FindLabelByName(labels []Label, name string) (Label, bool) {
 		}
 	}
 	return Label{}, false
+}
+
+// IsLabelUsedInBoard reports whether labelID is referenced by any card in b
+// (active lanes or archive), either as a regular label or as primary label.
+func IsLabelUsedInBoard(b *Board, labelID string) (bool, error) {
+	lanes, err := ReadLanes(b.Dir)
+	if err != nil {
+		return false, fmt.Errorf("is label used: read lanes: %w", err)
+	}
+	for _, lane := range lanes {
+		cards, err := ListCards(lane)
+		if err != nil {
+			return false, fmt.Errorf("is label used: list cards in lane %q: %w", lane.Name, err)
+		}
+		for _, c := range cards {
+			if c.PrimaryLabel == labelID {
+				return true, nil
+			}
+			for _, lid := range c.Labels {
+				if lid == labelID {
+					return true, nil
+				}
+			}
+		}
+	}
+	archived, err := ListArchivedCards(b)
+	if err != nil {
+		return false, fmt.Errorf("is label used: list archived cards: %w", err)
+	}
+	for _, c := range archived {
+		if c.PrimaryLabel == labelID {
+			return true, nil
+		}
+		for _, lid := range c.Labels {
+			if lid == labelID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

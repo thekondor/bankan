@@ -522,9 +522,35 @@ func TestAPI_LabelCRUD(t *testing.T) {
 	decodeJSON(t, resp.Body, &updated)
 	assert.Equal(t, "Defect", updated["name"])
 
-	// Remove label
+	// Remove label (force=true permanently deletes)
+	resp = c.do("DELETE", fmt.Sprintf("/api/v1/boards/%s/labels/%s?force=true", id, labelID), nil, c.token)
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	resp = c.get("/api/v1/boards/" + id + "/labels")
+	var labelsAfter []map[string]any
+	decodeJSON(t, resp.Body, &labelsAfter)
+	assert.Empty(t, labelsAfter)
+}
+
+func TestAPI_RemoveLabel_DefaultArchives(t *testing.T) {
+	c := newTestServer(t)
+	id := boardID(t, c)
+
+	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var lbl map[string]any
+	decodeJSON(t, resp.Body, &lbl)
+	labelID := lbl["id"].(string)
+
+	// Default DELETE archives (no ?force=true)
 	resp = c.del(fmt.Sprintf("/api/v1/boards/%s/labels/%s", id, labelID))
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	resp = c.get("/api/v1/boards/" + id + "/labels")
+	var labels []map[string]any
+	decodeJSON(t, resp.Body, &labels)
+	require.Len(t, labels, 1)
+	assert.Equal(t, bankan.ArchivedLabelPrefix+"Bug", labels[0]["name"])
 }
 
 func TestAPI_AddLabel_MissingFields(t *testing.T) {
@@ -1151,4 +1177,81 @@ func TestUI_ShowBoard_Returns204(t *testing.T) {
 	req.Header.Set("X-Bankan-Token", c.token)
 	resp, _ = http.DefaultClient.Do(req)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+func TestUI_DeleteLabelDialog_NoUsage(t *testing.T) {
+	c := newTestServer(t)
+	id := boardID(t, c)
+
+	// Add a label.
+	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var lbl map[string]any
+	decodeJSON(t, resp.Body, &lbl)
+	labelID := lbl["id"].(string)
+
+	// Fetch the delete-label dialog.
+	resp = c.get("/ui/modals/delete-label/" + id + "/" + labelID)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	assert.Contains(t, html, "Delete label")
+	assert.Contains(t, html, "Bug")
+	// Label is unused: checkbox must NOT appear.
+	assert.NotContains(t, html, "delete-label-archive-chk")
+}
+
+func TestUI_DeleteLabelDialog_WithUsage(t *testing.T) {
+	c := newTestServer(t)
+	id := boardID(t, c)
+
+	// Add a label.
+	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var lbl map[string]any
+	decodeJSON(t, resp.Body, &lbl)
+	labelID := lbl["id"].(string)
+
+	// Add a lane and a card that uses the label.
+	resp = c.post("/api/v1/boards/"+id+"/lanes", map[string]string{"name": "Backlog"})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp = c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+		"lane":      "backlog",
+		"title":     "Task",
+		"label_ids": []string{labelID},
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// Fetch the delete-label dialog.
+	resp = c.get("/ui/modals/delete-label/" + id + "/" + labelID)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	assert.Contains(t, html, "Delete label")
+	// Label is used: checkbox must appear pre-checked.
+	assert.Contains(t, html, "delete-label-archive-chk")
+}
+
+func TestUI_ArchiveLabel(t *testing.T) {
+	c := newTestServer(t)
+	id := boardID(t, c)
+
+	// Add a label.
+	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var lbl map[string]any
+	decodeJSON(t, resp.Body, &lbl)
+	labelID := lbl["id"].(string)
+
+	// Archive it.
+	resp = c.post("/ui/boards/"+id+"/labels/"+labelID+"/archive", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Verify label is now prefixed with 💼.
+	resp = c.get("/api/v1/boards/" + id + "/labels")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var labels []map[string]any
+	decodeJSON(t, resp.Body, &labels)
+	require.Len(t, labels, 1)
+	assert.Equal(t, bankan.ArchivedLabelPrefix+"Bug", labels[0]["name"])
 }

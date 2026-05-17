@@ -321,11 +321,24 @@ func TestLifecycle_LabelManagement(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "Defect", l.Name)
 
-	// Remove label.
+	// "feat" is unused; "bug" is used by the card above.
+	unusedLabel, _ := bankan.FindLabelByID(b2.Labels, "feat")
+	used, err := bankan.IsLabelUsedInBoard(b2, unusedLabel.ID)
+	require.NoError(t, err)
+	assert.False(t, used, "feat label has no cards")
+
+	usedLabel, _ := bankan.FindLabelByID(b2.Labels, "bug")
+	used, err = bankan.IsLabelUsedInBoard(b2, usedLabel.ID)
+	require.NoError(t, err)
+	assert.True(t, used, "bug label is assigned to 'Labelled Card'")
+
+	// Remove (hard-delete) unused label.
 	require.NoError(t, bankan.RemoveLabel(b, "feat"))
 	b3, err := bankan.ReadBoard(b.Dir)
 	require.NoError(t, err)
 	assert.Len(t, b3.Labels, 1)
+	_, stillThere := bankan.FindLabelByID(b3.Labels, "feat")
+	assert.False(t, stillThere)
 }
 
 func TestLifecycle_FindBoard_FromSubdir(t *testing.T) {
@@ -573,6 +586,56 @@ func TestLifecycle_ViewBoard_SyncBidirectional(t *testing.T) {
 	assert.NoError(t, err, "c3 stub should be added by sync")
 }
 
+func TestLifecycle_ViewBoard_SyncRelocatesStubAfterParentMove(t *testing.T) {
+	// When a card is moved within the parent board (e.g. via CLI), a subsequent
+	// sync must relocate the view stub to the matching view lane.
+	parent := initBoard(t, "Project")
+	require.NoError(t, bankan.AddLabel(parent, bankan.Label{ID: "sp", Name: "Sprint", Color: "#00ff00"}))
+	pBacklog := mustAddLane(t, parent, "Backlog")
+	pDoing := mustAddLane(t, parent, "Doing")
+
+	c := mustAddCardWithLabel(t, parent, pBacklog, "Tracked Card", "sp")
+
+	viewDir := filepath.Join(t.TempDir(), "view")
+	vb := mustInitViewBoard(t, viewDir, "Sprint View", parent, "sp")
+	require.NoError(t, bankan.SyncViewBoard(vb, parent))
+
+	// Initial state: stub is in Backlog.
+	_, stubLane, err := bankan.FindViewCardStub(vb, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "backlog", stubLane.Name)
+
+	// Move card in parent board directly (simulates a CLI move on the parent).
+	require.NoError(t, bankan.MoveCard(parent, c, pDoing))
+	assert.Equal(t, "doing", c.Lane)
+
+	// Sync: stub must follow the card to Doing.
+	require.NoError(t, bankan.SyncViewBoard(vb, parent))
+
+	_, stubLane, err = bankan.FindViewCardStub(vb, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "doing", stubLane.Name)
+
+	// Exactly one stub across all view lanes (no duplication).
+	viewLanes, err := bankan.ReadLanes(vb.Dir)
+	require.NoError(t, err)
+	total := 0
+	for _, l := range viewLanes {
+		stubs, err := bankan.ListViewCardStubs(l)
+		require.NoError(t, err)
+		total += len(stubs)
+	}
+	assert.Equal(t, 1, total)
+
+	// Card resolves correctly via the view lane it was relocated to.
+	vDoing, ok := bankan.LaneByName(viewLanes, "doing")
+	require.True(t, ok)
+	cards, err := bankan.ListViewCards(vb, parent, vDoing)
+	require.NoError(t, err)
+	require.Len(t, cards, 1)
+	assert.Equal(t, "Tracked Card", cards[0].Title)
+}
+
 func TestLifecycle_ViewBoard_LabelRemoveBlockedOnFilterLabel(t *testing.T) {
 	// The filter label on the parent board should not be removable while a view
 	// exists that depends on it. This is a caller-enforcement contract:
@@ -644,4 +707,99 @@ func TestLifecycle_DeleteCard_WithComments(t *testing.T) {
 
 	_, err = os.Stat(cardPath)
 	assert.True(t, os.IsNotExist(err))
+}
+
+func TestLifecycle_IsLabelUsedInBoard_SpansActiveLaneAndArchive(t *testing.T) {
+	b := initBoard(t, "Usage Scan")
+	lane := mustAddLane(t, b, "Backlog")
+
+	require.NoError(t, bankan.AddLabel(b, bankan.Label{ID: "lbl", Name: "Sprint", Color: "#3b82f6"}))
+
+	// Not used yet.
+	used, err := bankan.IsLabelUsedInBoard(b, "lbl")
+	require.NoError(t, err)
+	assert.False(t, used)
+
+	// Add a card with the label and check again.
+	c, err := bankan.AddCard(b, lane, "Sprint Task", "", []string{"lbl"})
+	require.NoError(t, err)
+	used, err = bankan.IsLabelUsedInBoard(b, "lbl")
+	require.NoError(t, err)
+	assert.True(t, used, "label is used in active lane")
+
+	// Archive the card — label must still be reported as used (in archive).
+	require.NoError(t, bankan.ArchiveCard(b, c))
+	used, err = bankan.IsLabelUsedInBoard(b, "lbl")
+	require.NoError(t, err)
+	assert.True(t, used, "label is still used in archived card")
+
+	// Restore the card and remove the label from it.
+	require.NoError(t, bankan.RestoreCard(b, c, lane))
+	c.Labels = nil
+	require.NoError(t, bankan.WriteCard(c))
+
+	used, err = bankan.IsLabelUsedInBoard(b, "lbl")
+	require.NoError(t, err)
+	assert.False(t, used, "label is no longer used after removal from card")
+}
+
+func TestLifecycle_IsLabelUsedInBoard_PrimaryLabel(t *testing.T) {
+	b := initBoard(t, "Primary Label Usage")
+	lane := mustAddLane(t, b, "Backlog")
+
+	require.NoError(t, bankan.AddLabel(b, bankan.Label{ID: "pri", Name: "Critical", Color: "#ef4444"}))
+
+	c, err := bankan.AddCard(b, lane, "Priority Task", "", nil)
+	require.NoError(t, err)
+
+	// Before setting primary label: not used.
+	used, err := bankan.IsLabelUsedInBoard(b, "pri")
+	require.NoError(t, err)
+	assert.False(t, used)
+
+	// Set as primary label.
+	c.PrimaryLabel = "pri"
+	require.NoError(t, bankan.WriteCard(c))
+
+	used, err = bankan.IsLabelUsedInBoard(b, "pri")
+	require.NoError(t, err)
+	assert.True(t, used, "label is used as primary label")
+}
+
+func TestLifecycle_LabelArchivePrefixing(t *testing.T) {
+	// Archiving a label means prefixing its name with ArchivedLabelPrefix.
+	// The label remains on the board and on all cards; it is only hidden
+	// from pickers via the prefix convention.
+	b := initBoard(t, "Archive Prefix")
+	lane := mustAddLane(t, b, "Backlog")
+
+	require.NoError(t, bankan.AddLabel(b, bankan.Label{ID: "sp", Name: "Sprint", Color: "#3b82f6"}))
+
+	// Assign to a card so we can verify it survives archiving.
+	c, err := bankan.AddCard(b, lane, "Sprint Card", "", []string{"sp"})
+	require.NoError(t, err)
+	assert.Contains(t, c.Labels, "sp")
+
+	// Archive the label: prefix its name.
+	lbl, ok := bankan.FindLabelByID(b.Labels, "sp")
+	require.True(t, ok)
+	lbl.Name = bankan.ArchivedLabelPrefix + lbl.Name
+	require.NoError(t, bankan.UpdateLabel(b, lbl))
+
+	// Verify prefix is persisted.
+	b2, err := bankan.ReadBoard(b.Dir)
+	require.NoError(t, err)
+	updated, ok := bankan.FindLabelByID(b2.Labels, "sp")
+	require.True(t, ok)
+	assert.Equal(t, bankan.ArchivedLabelPrefix+"Sprint", updated.Name)
+
+	// The card's label ID is unchanged — only the board-level name changed.
+	found, err := bankan.FindCard(b, c.ID, false)
+	require.NoError(t, err)
+	assert.Contains(t, found.Labels, "sp")
+
+	// IsLabelUsedInBoard still reports true (the card still references the ID).
+	used, err := bankan.IsLabelUsedInBoard(b2, "sp")
+	require.NoError(t, err)
+	assert.True(t, used)
 }

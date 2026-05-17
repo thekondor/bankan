@@ -327,7 +327,7 @@ is always read from the parent board's actual card file via `ResolveViewCard`.
 | Operation | Behaviour |
 |---|---|
 | `InitViewBoard` | Creates `view.md`, `_archive/`, and clones parent lanes |
-| `SyncViewBoard` | Adds stubs for new parent cards with FilterLabel; removes orphaned stubs |
+| `SyncViewBoard` | Adds stubs for new parent cards with FilterLabel; relocates stubs when the parent card has moved to a different lane (if a matching view lane exists); removes orphaned stubs |
 | `AddViewCard` | Creates card in parent (with FilterLabel), places stub in view lane |
 | `MoveViewCard` to shared lane | Moves card file in parent + moves stub in view |
 | `MoveViewCard` to view-only lane | Moves stub only; parent card file unchanged |
@@ -344,7 +344,17 @@ is always read from the parent board's actual card file via `ResolveViewCard`.
 2. Collect all card IDs from view stubs → **have set**.
 3. For IDs in `want \ have`: create stub in the matching view lane (fallback to
    first view lane if the parent lane doesn't exist in the view).
-4. For IDs in `have \ want`: remove orphaned stub (card no longer has the label).
+4. For IDs in `want ∩ have` where the parent card's current lane differs from
+   the stub's view lane: move the stub to the matching view lane. If the parent's
+   current lane has no matching view lane (e.g. a view-only lane was used), the
+   stub stays put.
+5. For IDs in `have \ want`: remove orphaned stub (card no longer has the label).
+
+**Implication for CLI workflows**: moving a card within the parent board (via
+`bankan card move --board <parent>`) does not immediately update view board
+stubs. The view board must be synced afterwards (`bankan board view sync
+--board <view>` or the "Sync" button in the UI) to relocate stubs to the
+correct view lanes.
 
 ---
 
@@ -656,6 +666,7 @@ exercise full multi-step workflows end-to-end:
 - View board: remove card from view (filter label removed, card preserved in parent).
 - View board: archive view board (cards unaffected in parent).
 - View board: bidirectional sync (new cards added, orphaned stubs removed).
+- View board: sync relocates stub when parent card moves to a mirrored lane.
 - View board: `FindViewBoard` walk-up from nested subdirectory.
 - View board: view and parent board as siblings in the same directory tree.
 

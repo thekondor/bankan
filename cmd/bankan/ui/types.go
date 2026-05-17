@@ -167,7 +167,7 @@ func darkenHex(hex string) string {
 	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
 }
 
-const archivedLabelPrefix = "💼 "
+const archivedLabelPrefix = bankan.ArchivedLabelPrefix
 
 func isArchivedLabel(l bankan.Label) bool {
 	return strings.HasPrefix(l.Name, archivedLabelPrefix)

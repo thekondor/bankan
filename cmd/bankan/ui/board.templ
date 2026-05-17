@@ -392,25 +392,62 @@ templ CardItem(c *bankan.Card, labels []bankan.Label, boardID string, token stri
 							data-menu="true"
 							title="Assign labels"
 						>🏷️</button>
-						<div class="card-label-picker-menu" style="display:none">
-							for _, l := range labels {
-								if !isArchivedLabel(l) {
-									<label
-										class="label-pick-item"
-										data-card={ c.ID }
-										data-board={ boardID }
-										data-label={ l.ID }
-										onclick="onCardLabelClick(event, this)"
-										data-menu="true"
-									>
-										<input type="checkbox" checked?={ containsLabel(c.Labels, l.ID) }/>
-										<span
-											class="card-label label-pick-pill"
-											style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
-										>{ l.Name }</span>
-									</label>
+						<div class="card-label-picker-menu" style="display:none" data-menu="true">
+							<div class="board-picker-labels" data-menu="true">
+								for _, l := range labels {
+									if !isArchivedLabel(l) {
+										<label
+											class="label-pick-item"
+											data-card={ c.ID }
+											data-board={ boardID }
+											data-label={ l.ID }
+											onclick="onCardLabelClick(event, this)"
+											data-menu="true"
+										>
+											<input type="checkbox" checked?={ containsLabel(c.Labels, l.ID) }/>
+											<span
+												class="card-label label-pick-pill label-draggable"
+												draggable="true"
+												data-label-id={ l.ID }
+												data-label-name={ l.Name }
+												data-label-color={ l.Color }
+												ondragstart="onBoardLabelDragStart(event,this)"
+												style={ "border-color:" + l.Color + ";color:" + l.Color + ";background:rgba(" + colorToRGB(l.Color) + ",0.12)" }
+											>{ l.Name }</span>
+										</label>
+									}
 								}
-							}
+							</div>
+							<div class="board-picker-primary" data-menu="true">
+								<span class="board-picker-primary-title text-dim">Primary</span>
+								<div
+									class="board-primary-drop-zone"
+									data-card={ c.ID }
+									data-board={ boardID }
+									data-primary-label={ c.PrimaryLabel }
+									data-menu="true"
+									ondragover="onBoardPrimaryLabelDragOver(event)"
+									ondragleave="onBoardPrimaryLabelDragLeave(event)"
+									ondrop="onBoardPrimaryLabelDrop(event)"
+								>
+									if c.PrimaryLabel != "" {
+										<span
+											class="card-label card-label-primary"
+											style={ cardLabelStyle(labels, c.PrimaryLabel) }
+										>{ labelName(labels, c.PrimaryLabel) }</span>
+										<button
+											type="button"
+											class="btn-icon"
+											onclick="clearBoardPrimaryLabel(this)"
+											data-menu="true"
+											style="font-size:11px;padding:2px 5px"
+											title="Clear primary label"
+										>✕</button>
+									} else {
+										<span class="text-dim" style="font-size:11px;text-align:center;line-height:1.4">Drop<br/>label<br/>here</span>
+									}
+								</div>
+							</div>
 						</div>
 					</div>
 				}
@@ -630,6 +667,44 @@ templ ArchiveViewBoardDialog(boardID string, boardName string, filterLabelID str
 					class="btn btn-danger btn-sm"
 					onclick={ templ.ComponentScript{Call: "confirmArchiveViewBoard('" + boardID + "')"} }
 				>Archive</button>
+				<button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Cancel</button>
+			</div>
+		</div>
+	</div>
+}
+
+// DeleteLabelDialog renders the confirmation dialog for deleting a label.
+// When isUsed is true a pre-checked checkbox offers to archive instead of delete.
+templ DeleteLabelDialog(boardID string, labelID string, labelName string, isUsed bool, token string) {
+	<div class="modal-backdrop" id="delete-label-modal" onclick="closeModalOnBackdrop(event,'delete-label-modal')">
+		<div class="modal" style="max-width:420px" onclick="event.stopPropagation()">
+			<div class="modal-header">
+				<span class="modal-title">Delete label</span>
+				<button class="modal-close" onclick="document.getElementById('modal-target').innerHTML=''">✕</button>
+			</div>
+			<div class="modal-body">
+				<div class="modal-section">
+					<p>Delete label <strong>{ labelName }</strong>?</p>
+					<p style="font-size:13px;color:var(--text-dim);margin-top:6px">
+						Cards using this label will lose it permanently.
+					</p>
+				</div>
+				if isUsed {
+					<div class="modal-section">
+						<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+							<input type="checkbox" id="delete-label-archive-chk" style="margin-top:3px" checked/>
+							<span style="font-size:13px">
+								This label is in use — archive instead of delete
+							</span>
+						</label>
+					</div>
+				}
+			</div>
+			<div class="form-row" style="padding:0 16px 16px">
+				<button
+					class="btn btn-danger btn-sm"
+					onclick={ templ.ComponentScript{Call: "confirmDeleteLabel('" + boardID + "','" + labelID + "')"} }
+				>Confirm</button>
 				<button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-target').innerHTML=''">Cancel</button>
 			</div>
 		</div>

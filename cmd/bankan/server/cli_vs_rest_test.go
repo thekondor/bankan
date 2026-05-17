@@ -1490,3 +1490,367 @@ func TestLifecycle_CLIvsREST_HideUnhideBoard(t *testing.T) {
 	assert.False(t, cliAfterUnhide.AlphaHidden, "board-alpha must be visible after unhide")
 	assert.False(t, cliAfterUnhide.BetaHidden, "board-beta must remain visible")
 }
+// ─── Label archive / force-delete equivalence test ───────────────────────────
+//
+// Verifies that both CLI and REST treat label remove the same way:
+//
+//   - Default remove (no --force / no ?force=true): label is archived
+//     (name prefixed with 💼, label still present on board).
+//   - Force remove (--force / ?force=true): label is permanently deleted.
+//
+// Scenario:
+//  1. Init board with two labels: "Backlog" and "Done"
+//  2. Remove "Backlog" without force  → must be archived
+//  3. Remove "Done" with force        → must be gone
+//  4. Assert resulting label slice is identical between CLI and REST paths.
+
+type labelListSnap struct {
+	Names []string // sorted label names
+}
+
+func takeLabelListSnap(t *testing.T, boardDir string) labelListSnap {
+	t.Helper()
+	b, err := bankan.ReadBoard(boardDir)
+	require.NoError(t, err)
+	names := make([]string, len(b.Labels))
+	for i, l := range b.Labels {
+		names[i] = l.Name
+	}
+	sort.Strings(names)
+	return labelListSnap{Names: names}
+}
+
+func runLabelArchiveDeleteViaRealCLI(t *testing.T) labelListSnap {
+	t.Helper()
+
+	rootDir := t.TempDir()
+	boardDir := filepath.Join(rootDir, "label-test")
+	require.NoError(t, os.Mkdir(boardDir, 0o755))
+
+	run := func(args ...string) string {
+		cmd := exec.Command(bankanBin, args...)
+		out, err := cmd.CombinedOutput()
+		outStr := strings.TrimSpace(string(out))
+		require.NoError(t, err, "bankan %s failed\n%s", strings.Join(args, " "), outStr)
+		return outStr
+	}
+
+	run("board", "init", boardDir, "--name", "Label Test Board")
+
+	backlogOut := run("label", "add", "--board", boardDir, "--name", "Backlog", "--color", "#3b82f6")
+	backlogID := extractIDFromOutput(t, backlogOut, "Label")
+
+	doneOut := run("label", "add", "--board", boardDir, "--name", "Done", "--color", "#22c55e")
+	doneID := extractIDFromOutput(t, doneOut, "Label")
+
+	// Default remove → archive
+	run("label", "remove", backlogID, "--board", boardDir)
+
+	// Force remove → permanent delete
+	run("label", "remove", doneID, "--board", boardDir, "--force")
+
+	return takeLabelListSnap(t, boardDir)
+}
+
+func runLabelArchiveDeleteViaRealREST(t *testing.T) labelListSnap {
+	t.Helper()
+
+	rootDir := t.TempDir()
+	boardDir := filepath.Join(rootDir, "label-test")
+	require.NoError(t, os.Mkdir(boardDir, 0o755))
+
+	_, err := bankan.InitBoard(boardDir, "Label Test Board")
+	require.NoError(t, err)
+
+	port := getFreePort(t)
+	const token = "test-token"
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	bid := filepath.Base(boardDir)
+
+	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+		"--port", strconv.Itoa(port),
+		"--token", token,
+		"--bind", "127.0.0.1")
+	serverCmd.Stdout = io.Discard
+	serverCmd.Stderr = io.Discard
+	require.NoError(t, serverCmd.Start())
+	t.Cleanup(func() {
+		if serverCmd.Process != nil {
+			_ = serverCmd.Process.Kill()
+			serverCmd.Wait() //nolint:errcheck
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		if hErr == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	resp, err := http.Get(baseURL + "/api/v1/boards")
+	require.NoError(t, err, "server did not start within 5 seconds")
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	restDo := func(method, path string, body any) *http.Response {
+		var r io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			r = bytes.NewReader(b)
+		}
+		req, reqErr := http.NewRequest(method, baseURL+path, r)
+		require.NoError(t, reqErr)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("X-Bankan-Token", token)
+		res, doErr := http.DefaultClient.Do(req)
+		require.NoError(t, doErr)
+		return res
+	}
+
+	decodeMap := func(res *http.Response) map[string]any {
+		var m map[string]any
+		require.NoError(t, json.NewDecoder(res.Body).Decode(&m))
+		_ = res.Body.Close()
+		return m
+	}
+
+	// Add labels
+	res := restDo("POST", "/api/v1/boards/"+bid+"/labels",
+		map[string]any{"name": "Backlog", "color": "#3b82f6"})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	backlogID := decodeMap(res)["id"].(string)
+
+	res = restDo("POST", "/api/v1/boards/"+bid+"/labels",
+		map[string]any{"name": "Done", "color": "#22c55e"})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	doneID := decodeMap(res)["id"].(string)
+
+	// Default DELETE → archive
+	res = restDo("DELETE", "/api/v1/boards/"+bid+"/labels/"+backlogID, nil)
+	require.Equal(t, http.StatusNoContent, res.StatusCode)
+	_ = res.Body.Close()
+
+	// DELETE ?force=true → permanent delete
+	req, _ := http.NewRequest("DELETE",
+		baseURL+"/api/v1/boards/"+bid+"/labels/"+doneID+"?force=true", nil)
+	req.Header.Set("X-Bankan-Token", token)
+	res, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, res.StatusCode)
+	_ = res.Body.Close()
+
+	return takeLabelListSnap(t, boardDir)
+}
+
+// TestLifecycle_CLIvsREST_LabelArchiveAndDelete verifies that the default
+// label remove archives it (💼 prefix) and --force / ?force=true permanently
+// deletes it, producing identical state through both code paths.
+func TestLifecycle_CLIvsREST_LabelArchiveAndDelete(t *testing.T) {
+	cliSnap := runLabelArchiveDeleteViaRealCLI(t)
+	restSnap := runLabelArchiveDeleteViaRealREST(t)
+
+	assert.Equal(t, cliSnap, restSnap,
+		"label state must be identical between real CLI and real REST paths")
+
+	// "Done" was force-deleted; only archived "Backlog" remains.
+	require.Len(t, cliSnap.Names, 1)
+	assert.Equal(t, bankan.ArchivedLabelPrefix+"Backlog", cliSnap.Names[0])
+}
+
+// ─── View board stub relocation equivalence test ──────────────────────────────
+//
+// Verifies that syncing a view board after a card has been moved within the
+// parent board relocates the view stub to the matching view lane, and that both
+// the real CLI and the real REST server produce identical state.
+//
+// Scenario:
+//  1. Init parent board with label "Sprint" and lanes "Backlog", "Doing"
+//  2. Add card "Sprinted Task" with label Sprint in Backlog
+//  3. Create view board "Sprint View" filtered by Sprint; sync
+//     → stub lands in Backlog view lane
+//  4. Move "Sprinted Task" to "Doing" in the PARENT board (not via view)
+//  5. Sync the view board
+//     → stub must be relocated to Doing view lane
+
+func runViewBoardStubRelocationViaRealCLI(t *testing.T) viewBoardSnap {
+	t.Helper()
+
+	rootDir := t.TempDir()
+	boardDir := filepath.Join(rootDir, "reloc-board")
+	require.NoError(t, os.Mkdir(boardDir, 0o755))
+	viewDir := filepath.Join(rootDir, "sprint-view")
+
+	run := func(args ...string) string {
+		cmd := exec.Command(bankanBin, args...)
+		out, err := cmd.CombinedOutput()
+		outStr := strings.TrimSpace(string(out))
+		require.NoError(t, err, "bankan %s failed\n%s", strings.Join(args, " "), outStr)
+		return outStr
+	}
+
+	run("board", "init", boardDir, "--name", "Reloc Board")
+	run("lane", "add", "Backlog", "--board", boardDir)
+	run("lane", "add", "Doing", "--board", boardDir)
+
+	labelOut := run("label", "add", "--board", boardDir, "--name", "Sprint", "--color", "#3b82f6")
+	labelID := extractIDFromOutput(t, labelOut, "Label")
+
+	cardOut := run("card", "add", "--board", boardDir,
+		"--lane", "backlog", "--title", "Sprinted Task", "--body", "", "--label", labelID)
+	cardID := extractIDFromOutput(t, cardOut, "Card")
+
+	run("board", "view", "create", viewDir,
+		"--parent", boardDir, "--label", labelID, "--name", "Sprint View")
+	run("board", "view", "sync", "--board", viewDir)
+
+	// Move card in parent board directly (not via view).
+	run("card", "move", cardID, "--board", boardDir, "--lane", "doing")
+
+	// Sync view: stub must be relocated to Doing.
+	run("board", "view", "sync", "--board", viewDir)
+
+	return takeViewBoardSnap(t, viewDir)
+}
+
+func runViewBoardStubRelocationViaRealREST(t *testing.T) viewBoardSnap {
+	t.Helper()
+
+	rootDir := t.TempDir()
+	boardDir := filepath.Join(rootDir, "reloc-board")
+	require.NoError(t, os.Mkdir(boardDir, 0o755))
+	viewDir := filepath.Join(rootDir, "sprint-view")
+
+	_, err := bankan.InitBoard(boardDir, "Reloc Board")
+	require.NoError(t, err)
+
+	port := getFreePort(t)
+	const token = "test-token"
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	bid := filepath.Base(boardDir) // "reloc-board"
+
+	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+		"--port", strconv.Itoa(port),
+		"--token", token,
+		"--bind", "127.0.0.1")
+	serverCmd.Stdout = io.Discard
+	serverCmd.Stderr = io.Discard
+	require.NoError(t, serverCmd.Start())
+	t.Cleanup(func() {
+		if serverCmd.Process != nil {
+			_ = serverCmd.Process.Kill()
+			serverCmd.Wait() //nolint:errcheck
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		if hErr == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	resp, err := http.Get(baseURL + "/api/v1/boards")
+	require.NoError(t, err, "server did not start within 5 seconds")
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	restDo := func(method, path string, body any) *http.Response {
+		var r io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			r = bytes.NewReader(b)
+		}
+		req, reqErr := http.NewRequest(method, baseURL+path, r)
+		require.NoError(t, reqErr)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("X-Bankan-Token", token)
+		res, doErr := http.DefaultClient.Do(req)
+		require.NoError(t, doErr)
+		return res
+	}
+	decodeMap := func(res *http.Response) map[string]any {
+		var m map[string]any
+		require.NoError(t, json.NewDecoder(res.Body).Decode(&m))
+		_ = res.Body.Close()
+		return m
+	}
+
+	// Setup: lanes, label, card.
+	res := restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "Backlog"})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	_ = res.Body.Close()
+
+	res = restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "Doing"})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	_ = res.Body.Close()
+
+	res = restDo("POST", "/api/v1/boards/"+bid+"/labels",
+		map[string]any{"name": "Sprint", "color": "#3b82f6"})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	labelID := decodeMap(res)["id"].(string)
+
+	res = restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+		"lane": "backlog", "title": "Sprinted Task", "body": "", "label_ids": []string{labelID},
+	})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	cardID := decodeMap(res)["id"].(string)
+
+	// Create + initial sync of view board.
+	res = restDo("POST", "/api/v1/view-boards", map[string]any{
+		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
+	})
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+	viewBoardID := decodeMap(res)["id"].(string)
+
+	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
+	require.Equal(t, http.StatusNoContent, res.StatusCode)
+	_ = res.Body.Close()
+
+	// Move card in parent board directly (not via view).
+	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/move", bid, cardID),
+		map[string]any{"to_lane": "doing"})
+	require.Equal(t, http.StatusNoContent, res.StatusCode)
+	_ = res.Body.Close()
+
+	// Sync view: stub must be relocated to Doing.
+	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
+	require.Equal(t, http.StatusNoContent, res.StatusCode)
+	_ = res.Body.Close()
+
+	_ = viewDir
+	return takeViewBoardSnap(t, viewDir)
+}
+
+// TestLifecycle_CLIvsREST_ViewBoardSyncRelocatesStub verifies that syncing a
+// view board after a parent-board card move relocates the stub to the matching
+// view lane, and that both code paths produce identical state.
+func TestLifecycle_CLIvsREST_ViewBoardSyncRelocatesStub(t *testing.T) {
+	cliSnap := runViewBoardStubRelocationViaRealCLI(t)
+	restSnap := runViewBoardStubRelocationViaRealREST(t)
+
+	assert.Equal(t, cliSnap, restSnap,
+		"view board state must be identical between real CLI and real REST paths after stub relocation")
+
+	// "Sprinted Task" must appear in Doing, not Backlog.
+	require.Len(t, cliSnap.Lanes, 2)
+	backlog := cliSnap.Lanes[0]
+	doing := cliSnap.Lanes[1]
+	assert.Equal(t, "backlog", backlog.Name)
+	assert.Empty(t, backlog.Cards, "backlog must be empty after card move + sync")
+	assert.Equal(t, "doing", doing.Name)
+	require.Len(t, doing.Cards, 1)
+	assert.Equal(t, "Sprinted Task", doing.Cards[0].Title)
+}

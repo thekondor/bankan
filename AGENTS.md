@@ -223,6 +223,29 @@ card_id: ab12c
 ---
 ```
 
+### View board sync semantics
+
+Stubs **do not self-update** when a card moves in the parent board. A stub's
+lane position is updated only when `SyncViewBoard` is called explicitly (via
+`bankan board view sync --board <view>` or `POST /api/v1/boards/{id}/sync`).
+
+`SyncViewBoard` applies four passes in order:
+
+1. **Want set** — collect all parent cards that carry `FilterLabel`.
+2. **Add missing** — for each want-set card with no stub, create a stub in the
+   matching view lane (by lane name). Fallback: first view lane if none matches;
+   skip if the view has no lanes.
+3. **Relocate misplaced** — for each existing stub whose parent card has moved
+   to a different lane: if the parent's new lane has a matching view lane, move
+   the stub there. If there is no matching view lane, the stub stays put.
+4. **Remove orphans** — delete stubs for cards that no longer carry `FilterLabel`.
+
+**Consequence for callers**: when you move a card in the parent board (e.g. via
+`MoveCard`), view board stubs are **not** updated automatically. Code that
+moves parent-board cards must document that a subsequent `SyncViewBoard` call
+is required to keep view stubs consistent. Do not assume stubs track the
+parent's current lane without an explicit sync.
+
 ### View board `view.md`
 
 ```yaml

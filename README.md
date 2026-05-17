@@ -128,13 +128,31 @@ bankan lane add / list / rename / remove
 
 bankan card add / list / show / edit / move / archive / restore / delete / duplicate / reorder / search
 bankan comment add / edit / list
-bankan label add / list / edit / remove
+bankan label add / list / edit / remove [--force]
 
 bankan serve          # start the web UI + REST API
 bankan ai-skill       # generate an AI agent skill file (claude-code / opencode / codex)
 ```
 
 Run `bankan <command> --help` for flags and examples.
+
+### Label archiving
+
+`bankan label remove <id>` **archives** the label by default: the name is
+prefixed with `💼 ` so it is hidden from pickers but still visible on cards that
+already carry it. This is the safe default — no card data is lost.
+
+To permanently delete the label (and strip it from all cards on the next board
+read), pass `--force`:
+
+```bash
+bankan label remove <id> --board ./my-board          # archive (default)
+bankan label remove <id> --board ./my-board --force  # permanent delete
+```
+
+The REST API follows the same convention:
+- `DELETE /api/v1/boards/{id}/labels/{labelId}` — archives (default)
+- `DELETE /api/v1/boards/{id}/labels/{labelId}?force=true` — permanent delete
 
 ## AI agent integration (experimental)
 

@@ -160,6 +160,8 @@ func (s *Server) registerRoutes() {
 	mux.HandleFunc("GET /ui/modals/manage-labels/{boardId}", s.loggingMiddleware(s.handleUIManageLabelsModal))
 	mux.HandleFunc("GET /ui/modals/board-settings/{id}", s.loggingMiddleware(s.handleUIBoardSettingsModal))
 	mux.HandleFunc("GET /ui/modals/archive-view-board/{id}", s.loggingMiddleware(s.handleUIArchiveViewBoardModal))
+	mux.HandleFunc("GET /ui/modals/delete-label/{boardId}/{labelId}", s.loggingMiddleware(s.handleUIDeleteLabelDialog))
+	mux.HandleFunc("POST /ui/boards/{id}/labels/{labelId}/archive", wrap(s.handleUIArchiveLabel))
 	mux.HandleFunc("PATCH /ui/boards/{id}/color", wrap(s.handleUIUpdateBoardColor))
 	mux.HandleFunc("GET /ui/boards/{id}/label-picker", s.loggingMiddleware(s.handleUILabelPicker))
 	mux.HandleFunc("GET /ui/boards/{id}/labels-fragment", s.loggingMiddleware(s.handleUIBoardLabelsFragment))

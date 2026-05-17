@@ -746,8 +746,10 @@ func (s *Server) handleUpdateLabel(w http.ResponseWriter, r *http.Request) {
 }
 
 // DELETE /api/v1/boards/{id}/labels/{labelId}
+// By default archives the label (prefix 💼). Pass ?force=true to permanently delete.
 func (s *Server) handleRemoveLabel(w http.ResponseWriter, r *http.Request) {
-	if err := s.reg.RemoveLabel(boardID(r), r.PathValue("labelId")); err != nil {
+	force := r.URL.Query().Get("force") == "true"
+	if err := s.reg.RemoveLabel(boardID(r), r.PathValue("labelId"), force); err != nil {
 		writeServiceError(w, err)
 		return
 	}
