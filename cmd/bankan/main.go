@@ -1490,55 +1490,65 @@ func main() {
 
 // ─── serve ────────────────────────────────────────────────────────────────────
 
+// parseWorkspaceArg parses a single positional "serve" argument.
+// Format: "name:path" or bare "path".
+func parseWorkspaceArg(arg string) service.WorkspaceArg {
+	if idx := strings.Index(arg, ":"); idx > 0 {
+		name := arg[:idx]
+		path := arg[idx+1:]
+		if path != "" {
+			return service.WorkspaceArg{Name: name, Dir: path}
+		}
+	}
+	return service.WorkspaceArg{Dir: arg}
+}
+
 func newServeCmd() *cobra.Command {
 	var (
-		boardDirs []string
-		port      int
-		bind      string
-		token     string
-		noToken   bool
+		port    int
+		bind    string
+		token   string
+		noToken bool
 	)
 	cmd := &cobra.Command{
-		Use:   "serve [dirs...]",
+		Use:   "serve [name:dir...]",
 		Short: "Start the REST API and HTMX UI server",
 		Long: `Start bankan as an HTTP server exposing a REST API and a web UI.
 
-Positional arguments are directories to serve:
-  - If a directory contains board.md or view.md it is registered as a board.
-  - Otherwise it is scanned one level deep for boards (and used as the root
-    for new board creation).
+Each positional argument specifies a workspace root directory.
+Format: "name:path" to set an explicit workspace name, or bare "path" to
+derive the name from the last two path components.
 
-Additional individual board directories can be given with --board.
+Each root directory is scanned one level deep for boards and used as the
+root for new board creation. If it contains board.md or view.md directly,
+it is registered as a single-board workspace.
 
 Examples:
   bankan serve /my/project
-  bankan serve /parent/dir --board /other/board
+  bankan serve my-team:/path/to/boards ops:/other/boards
   bankan serve --port 9090 --no-token /my/boards`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			allDirs := append(args, boardDirs...)
-			if len(allDirs) == 0 {
-				// Fall back to cwd
-				cwd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
-				allDirs = []string{cwd}
+			wsArgs := make([]service.WorkspaceArg, 0, len(args))
+			for _, a := range args {
+				wsArgs = append(wsArgs, parseWorkspaceArg(a))
 			}
 
-			reg, err := service.NewRegistry(allDirs, "")
+			workspaces, err := service.NewWorkspaces(wsArgs)
 			if err != nil {
-				return fmt.Errorf("load boards: %w", err)
+				return fmt.Errorf("load workspaces: %w", err)
 			}
 
-			ids := reg.BoardIDs()
-			if len(ids) == 0 {
-				fmt.Fprintln(os.Stderr, "Warning: no boards found in the specified directories.")
-			} else {
-				fmt.Printf("Serving %d board(s): %s\n", len(ids), strings.Join(ids, ", "))
+			for _, ws := range workspaces {
+				ids := ws.Reg.BoardIDs()
+				if len(ids) == 0 {
+					fmt.Fprintf(os.Stderr, "Warning: workspace %q has no boards.\n", ws.Name)
+				} else {
+					fmt.Printf("Workspace %q: %d board(s): %s\n", ws.Name, len(ids), strings.Join(ids, ", "))
+				}
 			}
 
 			logger := log.New(os.Stdout, "[bankan] ", log.LstdFlags)
-			srv, err := server.New(reg, server.Config{
+			srv, err := server.New(workspaces, server.Config{
 				Bind:    bind,
 				Port:    port,
 				Token:   token,
@@ -1560,7 +1570,6 @@ Examples:
 			return http.ListenAndServe(addr, srv)
 		},
 	}
-	cmd.Flags().StringArrayVar(&boardDirs, "board", nil, "Additional individual board directory (repeatable)")
 	cmd.Flags().IntVar(&port, "port", 8080, "HTTP port to listen on")
 	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "Address to bind (use 0.0.0.0 for all interfaces)")
 	cmd.Flags().StringVar(&token, "token", "", "Pre-set token (default: random 32-byte hex token)")

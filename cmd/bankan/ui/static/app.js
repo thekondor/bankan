@@ -58,10 +58,36 @@ function _isCardModalOpen() {
   return ids.some(function(id) { return !!document.getElementById(id); });
 }
 
-// Parses the board ID out of the current pathname (/ui/boards/{id}/...).
+// Parses the board ID out of the current pathname.
+// Handles both /ui/workspaces/{wsID}/boards/{id} and /ui/boards/{id}.
 function _extractBoardIdFromPath() {
-  var m = location.pathname.match(/\/ui\/boards\/([^\/]+)/);
+  var m = location.pathname.match(/\/ui\/workspaces\/[^\/]+\/boards\/([^\/]+)/);
+  if (m) return m[1];
+  m = location.pathname.match(/\/ui\/boards\/([^\/]+)/);
   return m ? m[1] : null;
+}
+
+// Reads the workspace ID from the board-view element.
+function _getWorkspaceId() {
+  return document.getElementById('board-view')?.dataset.workspace || '';
+}
+
+// Returns the workspace ID extracted from the current URL path.
+function _extractWorkspaceIdFromPath() {
+  var m = location.pathname.match(/\/ui\/workspaces\/([^\/]+)/);
+  return m ? m[1] : '';
+}
+
+// Builds the UI path for a board in a workspace.
+function _uiBoardPath(wsID, boardID) {
+  if (wsID) return '/ui/workspaces/' + wsID + '/boards/' + boardID;
+  return '/ui/boards/' + boardID;
+}
+
+// Builds the API path prefix for a board in a workspace.
+function _apiBoardPath(wsID, boardID) {
+  if (wsID) return '/api/v1/workspaces/' + wsID + '/boards/' + boardID;
+  return '/api/v1/boards/' + boardID;
 }
 
 // Removes ?card and ?comment from the URL without navigating.
@@ -127,7 +153,8 @@ function doSubmitAddLane(boardID) {
   const form = document.getElementById('add-lane-form');
   const name = form.querySelector('input').value.trim();
   if (!name) return;
-  fetch(`/ui/boards/${boardID}/lanes`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/lanes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ name })
@@ -184,7 +211,8 @@ function submitAddCard(laneName, boardID, btn) {
 
   if (!title) return;
 
-  fetch(`/ui/boards/${boardID}/cards`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/cards', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ lane: laneName, title, body, label_ids: labelIDs })
@@ -235,11 +263,12 @@ function _showBoardPicker(menu) {
 
 // ── Archive card ──────────────────────────────────────────────────────────
 function archiveCard(cardID, boardID) {
+  const wsID = _getWorkspaceId();
   // When show_archived is active the server returns a full board view so the
   // card re-appears as archived in its lane. Use htmx.ajax for the swap.
   if (new URLSearchParams(window.location.search).get('show_archived') === 'true') {
     closeModal();
-    htmx.ajax('POST', `/ui/boards/${boardID}/cards/${cardID}/archive`, {
+    htmx.ajax('POST', _uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/archive', {
       target: '#board-view',
       swap: 'outerHTML',
       headers: { 'X-Bankan-Token': getToken() }
@@ -251,7 +280,7 @@ function archiveCard(cardID, boardID) {
   const cardsEl = cardEl ? cardEl.closest('.lane-cards') : null;
   const laneName = cardsEl ? cardsEl.dataset.lane : null;
 
-  fetch(`/ui/boards/${boardID}/cards/${cardID}/archive`, {
+  fetch(_uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/archive', {
     method: 'POST',
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => {
@@ -265,7 +294,8 @@ function archiveCard(cardID, boardID) {
 // ── Duplicate card ────────────────────────────────────────────────────────
 function duplicateCard(cardID, boardID) {
   closeAllDropdowns();
-  fetch(`/ui/boards/${boardID}/cards/${cardID}/duplicate`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/duplicate', {
     method: 'POST',
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => {
@@ -284,7 +314,7 @@ function duplicateCard(cardID, boardID) {
 // ── Card detail modal ─────────────────────────────────────────────────────
 function openCardDetailModal(event, cardID, boardID) {
   if (event && isMenuClick(event)) return;
-  return fetch(`/ui/modals/card/${cardID}/boards/${boardID}`, {
+  return fetch('/ui/modals/card/' + cardID + '/boards/' + boardID + '?ws=' + _getWorkspaceId(), {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => {
     if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
@@ -347,9 +377,10 @@ function onCardLabelClick(event, el) {
   const boardID = el.dataset.board;
   const labelID = el.dataset.label;
   const payload = wasChecked ? { remove_labels: [labelID] } : { add_labels: [labelID] };
+  const wsID = _getWorkspaceId();
 
   // Use the UI PATCH endpoint: updates the card and returns the updated card HTML.
-  fetch(`/ui/boards/${boardID}/cards/${cardID}`, {
+  fetch(_uiBoardPath(wsID, boardID) + '/cards/' + cardID, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify(payload)
@@ -373,7 +404,7 @@ function onCardLabelClick(event, el) {
     }
     // If the card detail modal is open, re-fetch it and keep its picker open too.
     if (document.getElementById('card-modal')) {
-      return fetch(`/ui/modals/card/${cardID}/boards/${boardID}`, {
+      return fetch('/ui/modals/card/' + cardID + '/boards/' + boardID + '?ws=' + wsID, {
         headers: { 'X-Bankan-Token': getToken() }
       }).then(r2 => r2.text()).then(html => {
         document.getElementById('modal-target').innerHTML = html;
@@ -387,7 +418,7 @@ function onCardLabelClick(event, el) {
 // ── Move card modal ───────────────────────────────────────────────────────
 function openMoveCardModal(cardID, boardID) {
   closeAllDropdowns();
-  fetch(`/ui/modals/card/${cardID}/boards/${boardID}?view=move`, {
+  fetch('/ui/modals/card/' + cardID + '/boards/' + boardID + '?view=move&ws=' + _getWorkspaceId(), {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => r.text()).then(html => {
     document.getElementById('modal-target').innerHTML = html;
@@ -400,7 +431,8 @@ function openMoveCardModal(cardID, boardID) {
 function submitMoveCard(event, cardID, boardID, laneName) {
   if (event) event.stopPropagation();
   closeModal();
-  htmx.ajax('POST', `/ui/boards/${boardID}/cards/${cardID}/move`, {
+  const wsID = _getWorkspaceId();
+  htmx.ajax('POST', _uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/move', {
     target: '#board-view',
     swap: 'outerHTML',
     values: { to_lane: laneName },
@@ -411,7 +443,7 @@ function submitMoveCard(event, cardID, boardID, laneName) {
 // ── Edit card modal ───────────────────────────────────────────────────────
 function openEditCardModal(cardID, boardID) {
   closeAllDropdowns();
-  fetch(`/ui/modals/card/${cardID}/boards/${boardID}?view=edit`, {
+  fetch('/ui/modals/card/' + cardID + '/boards/' + boardID + '?view=edit&ws=' + _getWorkspaceId(), {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => r.text()).then(html => {
     document.getElementById('modal-target').innerHTML = html;
@@ -425,7 +457,7 @@ function openEditCardModal(cardID, boardID) {
 function openUnarchiveCardModal(event, cardID, boardID) {
   if (event) event.stopPropagation();
   closeAllDropdowns();
-  fetch(`/ui/modals/card/${cardID}/boards/${boardID}?view=unarchive`, {
+  fetch('/ui/modals/card/' + cardID + '/boards/' + boardID + '?view=unarchive&ws=' + _getWorkspaceId(), {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => {
     if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
@@ -441,7 +473,8 @@ function openUnarchiveCardModal(event, cardID, boardID) {
 function submitRestoreCard(event, cardID, boardID, laneName) {
   if (event) event.stopPropagation();
   closeModal();
-  htmx.ajax('POST', `/ui/boards/${boardID}/cards/${cardID}/restore`, {
+  const wsID = _getWorkspaceId();
+  htmx.ajax('POST', _uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/restore', {
     target: '#board-view',
     swap: 'outerHTML',
     values: { to_lane: laneName },
@@ -460,8 +493,9 @@ function submitEditCard(event, form) {
   const unchecked = Array.from(form.querySelectorAll('[name=labels]:not(:checked)')).map(c => c.value);
   const primaryLabelEl = form.querySelector('[name=primary_label]');
   const primaryLabel = primaryLabelEl ? primaryLabelEl.value : null;
+  const wsID = _getWorkspaceId();
 
-  fetch(`/api/v1/boards/${boardID}/cards/${cardID}`, {
+  fetch(_apiBoardPath(wsID, boardID) + '/cards/' + cardID, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': token },
     body: JSON.stringify({ title, body, add_labels: checked, remove_labels: unchecked, primary_label: primaryLabel })
@@ -476,8 +510,12 @@ function submitEditCard(event, form) {
 
 // ── Add board modal ───────────────────────────────────────────────────────
 function openAddBoardModal() {
-  const match = window.location.pathname.match(/^\/ui\/boards\/([^/]+)/);
-  const qs = match ? '?board_id=' + encodeURIComponent(match[1]) : '';
+  const wsID = _getWorkspaceId() || _extractWorkspaceIdFromPath();
+  const boardID = _extractBoardIdFromPath();
+  const params = new URLSearchParams();
+  if (wsID) params.set('ws', wsID);
+  if (boardID) params.set('board_id', boardID);
+  const qs = params.toString() ? '?' + params.toString() : '';
   fetch('/ui/modals/add-board' + qs).then(r => r.text()).then(html => {
     document.getElementById('modal-target').innerHTML = html;
   });
@@ -604,7 +642,8 @@ function onLabelColorChange(input) {
   const labelID = row.dataset.labelId;
   const name    = row.dataset.labelName;
   const color   = input.value;
-  fetch(`/ui/boards/${boardID}/labels/${labelID}`, {
+  const wsID    = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/labels/' + labelID, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ name, color })
@@ -642,9 +681,10 @@ function updateLabelsCountBtn(delta) {
 // Reloads card items for all visible lanes to reflect label changes in the
 // per-card label picker menus (.card-label-picker-menu).
 function refreshAllLaneCards(boardID) {
+  const wsID = _getWorkspaceId();
   document.querySelectorAll('.lane-cards[data-lane]').forEach(function(el) {
     var laneName = el.dataset.lane;
-    fetch('/ui/boards/' + boardID + '/lanes/' + encodeURIComponent(laneName) + '/cards', {
+    fetch(_uiBoardPath(wsID, boardID) + '/lanes/' + encodeURIComponent(laneName) + '/cards', {
       headers: { 'X-Bankan-Token': getToken() }
     }).then(function(r) { return r.text(); }).then(function(html) {
       el.innerHTML = html;
@@ -655,7 +695,8 @@ function refreshAllLaneCards(boardID) {
 // Fetches fresh label-picker HTML from the server and updates every
 // .label-pick-list in the board (i.e. every add-card inline form).
 function refreshLabelPickers(boardID) {
-  fetch(`/ui/boards/${boardID}/label-picker`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/label-picker', {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => r.text()).then(html => {
     const tmp = document.createElement('div');
@@ -671,7 +712,8 @@ function refreshLabelPickers(boardID) {
 function openBoardSettingsModal(boardID) {
   if (!boardID) boardID = document.getElementById('board-view')?.dataset.board;
   if (!boardID) return;
-  fetch(`/ui/modals/board-settings/${boardID}`, {
+  const wsID = _getWorkspaceId();
+  fetch('/ui/modals/board-settings/' + boardID + '?ws=' + wsID, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => r.text()).then(html => {
     document.getElementById('modal-target').innerHTML = html;
@@ -690,7 +732,8 @@ function syncBoardColor(value) {
 function submitBoardColor(boardID) {
   const color = document.getElementById('bsetting-color-text')?.value.trim();
   if (!color) return;
-  fetch(`/ui/boards/${boardID}/color`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/color', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ color })
@@ -704,7 +747,8 @@ function submitBoardColor(boardID) {
 function openManageLabelsModal(boardID) {
   if (!boardID) boardID = document.getElementById('board-view')?.dataset.board;
   if (!boardID) return;
-  fetch(`/ui/modals/manage-labels/${boardID}`, {
+  const wsID = _getWorkspaceId();
+  fetch('/ui/modals/manage-labels/' + boardID + '?ws=' + wsID, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => r.text()).then(html => {
     document.getElementById('modal-target').innerHTML = html;
@@ -726,7 +770,8 @@ function submitRenameLabel(boardID, labelID) {
   const name  = document.getElementById('rename-name-' + labelID)?.value.trim();
   const color = document.getElementById('rename-color-' + labelID)?.value.trim();
   if (!name) return;
-  fetch(`/ui/boards/${boardID}/labels/${labelID}`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/labels/' + labelID, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ name, color })
@@ -742,7 +787,8 @@ function submitRenameLabel(boardID, labelID) {
 }
 
 function openDeleteLabelDialog(boardID, labelID) {
-  fetch(`/ui/modals/delete-label/${boardID}/${labelID}`, {
+  const wsID = _getWorkspaceId();
+  fetch('/ui/modals/delete-label/' + boardID + '/' + labelID + '?ws=' + wsID, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(r => {
     if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
@@ -753,16 +799,19 @@ function openDeleteLabelDialog(boardID, labelID) {
 }
 
 function confirmDeleteLabel(boardID, labelID) {
+  const wsID = _getWorkspaceId();
   const chk = document.getElementById('delete-label-archive-chk');
   const archive = chk ? chk.checked : false;
   const url    = archive
-    ? `/ui/boards/${boardID}/labels/${labelID}/archive`
-    : `/ui/boards/${boardID}/labels/${labelID}`;
+    ? _uiBoardPath(wsID, boardID) + '/labels/' + labelID + '/archive'
+    : _uiBoardPath(wsID, boardID) + '/labels/' + labelID;
   const method = archive ? 'POST' : 'DELETE';
   fetch(url, { method, headers: { 'X-Bankan-Token': getToken() } })
     .then(r => {
       if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
-      return r.text();
+      return fetch('/ui/modals/manage-labels/' + boardID + '?ws=' + wsID, {
+        headers: { 'X-Bankan-Token': getToken() }
+      }).then(r2 => r2.text());
     })
     .then(html => {
       document.getElementById('modal-target').innerHTML = html;
@@ -780,16 +829,17 @@ function submitAddLabelFromModal(event, form) {
   const name    = form.querySelector('[name=name]').value.trim();
   const color   = form.querySelector('[name=color]').value.trim();
   if (!name || !color) return;
+  const wsID = _getWorkspaceId();
   const fd = new FormData();
   fd.append('name', name);
   fd.append('color', color);
-  fetch(`/ui/boards/${boardID}/labels`, {
+  fetch(_uiBoardPath(wsID, boardID) + '/labels', {
     method: 'POST',
     headers: { 'X-Bankan-Token': getToken() },
     body: fd
   }).then(r => {
     if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Failed'); });
-    return fetch(`/ui/modals/manage-labels/${boardID}`, {
+    return fetch('/ui/modals/manage-labels/' + boardID + '?ws=' + wsID, {
       headers: { 'X-Bankan-Token': getToken() }
     }).then(r2 => r2.text());
   }).then(html => {
@@ -844,7 +894,7 @@ function onViewParentChange(select) {
     target.innerHTML = '<option value="">Select a label…</option>';
     return;
   }
-  fetch('/ui/boards/' + parentID + '/labels-fragment')
+  fetch(_uiBoardPath(_getWorkspaceId(), parentID) + '/labels-fragment')
     .then(r => r.text())
     .then(html => {
       target.innerHTML = '<option value="">Select a label…</option>' + html;
@@ -857,6 +907,7 @@ function submitNewBoard(event, form) {
   event.preventDefault();
   const type  = form.querySelector('[name=board_type]').value;
   const token = form.dataset.token || getToken();
+  const wsID  = _getWorkspaceId() || _extractWorkspaceIdFromPath();
 
   if (type === 'view') {
     const name     = form.querySelector('[name=name]').value.trim();
@@ -866,7 +917,8 @@ function submitNewBoard(event, form) {
       showToast('Name, parent board and filter label are all required', 'error');
       return;
     }
-    fetch('/api/v1/view-boards', {
+    const viewBoardUrl = wsID ? '/api/v1/workspaces/' + wsID + '/view-boards' : '/api/v1/view-boards';
+    fetch(viewBoardUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': token },
       body: JSON.stringify({ name, parent_id: parentID, filter_label_id: labelID })
@@ -875,12 +927,13 @@ function submitNewBoard(event, form) {
       return r.json();
     }).then(board => {
       document.getElementById('modal-target').innerHTML = '';
-      window.location.href = '/ui/boards/' + board.id;
+      window.location.href = _uiBoardPath(wsID, board.id);
     }).catch(e => showToast(e.message, 'error'));
   } else {
     const name = form.querySelector('[name=name]').value.trim();
     if (!name) return;
-    fetch('/api/v1/boards', {
+    const boardUrl = wsID ? '/api/v1/workspaces/' + wsID + '/boards' : '/api/v1/boards';
+    fetch(boardUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': token },
       body: JSON.stringify({ name })
@@ -889,7 +942,7 @@ function submitNewBoard(event, form) {
       return r.json();
     }).then(board => {
       document.getElementById('modal-target').innerHTML = '';
-      window.location.href = '/ui/boards/' + board.id;
+      window.location.href = _uiBoardPath(wsID, board.id);
     }).catch(e => showToast(e.message, 'error'));
   }
 }
@@ -936,7 +989,8 @@ function submitRenameLane() {
     document.getElementById('modal-target').innerHTML = '';
     return;
   }
-  fetch(`/api/v1/boards/${boardID}/lanes/${encodeURIComponent(laneName)}`, {
+  const wsID = _getWorkspaceId();
+  fetch(_apiBoardPath(wsID, boardID) + '/lanes/' + encodeURIComponent(laneName), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ new_name: newName })
@@ -956,8 +1010,9 @@ function submitComment(event, form) {
   const body    = form.querySelector('[name=body]').value.trim();
   const author  = form.querySelector('[name=author]').value.trim();
   if (!body) return;
+  const wsID = form.dataset.workspace || _getWorkspaceId();
 
-  fetch(`/ui/boards/${boardID}/cards/${cardID}/comment`, {
+  fetch(_uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/comment', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': token },
     body: JSON.stringify({ author, body })
@@ -996,9 +1051,10 @@ function submitEditComment(commentID) {
   const boardID = form?.dataset.board;
   const cardID  = form?.dataset.card;
   const token   = form?.dataset.token || getToken();
+  const wsID    = form?.dataset.workspace || _getWorkspaceId();
   if (!boardID || !cardID) { showToast('Cannot resolve board/card context', 'error'); return; }
 
-  fetch(`/ui/boards/${boardID}/cards/${cardID}/comments/${commentID}`, {
+  fetch(_uiBoardPath(wsID, boardID) + '/cards/' + cardID + '/comments/' + commentID, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': token },
     body: JSON.stringify({ body })
@@ -1118,7 +1174,8 @@ function _updateBoardCardPrimaryLabel(cardID, boardID, labelID, oldPrimaryID) {
   if (oldPrimaryID && oldPrimaryID !== labelID) {
     payload.remove_labels = [oldPrimaryID];
   }
-  fetch(`/ui/boards/${boardID}/cards/${cardID}`, {
+  const wsID = _getWorkspaceId();
+  fetch(_uiBoardPath(wsID, boardID) + '/cards/' + cardID, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify(payload)
@@ -1139,7 +1196,7 @@ function _updateBoardCardPrimaryLabel(cardID, boardID, labelID, oldPrimaryID) {
 // ── Board reload ──────────────────────────────────────────────────────────
 function reloadBoard(boardID) {
   const savedScrollLeft = document.getElementById('board-view')?.scrollLeft ?? 0;
-  fetch(`/ui/boards/${boardID}`)
+  fetch(_uiBoardPath(_getWorkspaceId(), boardID))
     .then(r => r.text())
     .then(html => {
       document.open();
@@ -1176,12 +1233,13 @@ function initSortable() {
         const cardID  = evt.item.dataset.cardId;
         const boardID = evt.item.dataset.board;
         const toLane  = evt.to.dataset.lane;
+        const wsID    = _getWorkspaceId();
 
         if (evt.from === evt.to) {
           // Same lane: reorder within the lane.
           if (evt.oldIndex === evt.newIndex) return;
           const newIndex = evt.newIndex;
-          fetch(`/api/v1/boards/${boardID}/cards/${cardID}/reorder`, {
+          fetch(_apiBoardPath(wsID, boardID) + '/cards/' + cardID + '/reorder', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
             body: JSON.stringify({ new_index: newIndex })
@@ -1203,7 +1261,7 @@ function initSortable() {
           evt.from.insertAdjacentHTML('afterbegin', '<div class="empty-lane">No cards yet</div>');
         }
 
-        fetch(`/api/v1/boards/${boardID}/cards/${cardID}/move`, {
+        fetch(_apiBoardPath(wsID, boardID) + '/cards/' + cardID + '/move', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
           body: JSON.stringify({ to_lane: toLane })
@@ -1239,7 +1297,9 @@ function initSortable() {
         if (evt.oldIndex === evt.newIndex) return;
         const ids = Array.from(tabNav.querySelectorAll('.board-tab:not(.board-tab-archived):not(.board-tab-hidden)[data-board-id]'))
           .map(function(el) { return el.dataset.boardId; });
-        fetch('/api/v1/boards/reorder', {
+        const wsID = _getWorkspaceId();
+        const reorderUrl = wsID ? '/api/v1/workspaces/' + wsID + '/boards/reorder' : '/api/v1/boards/reorder';
+        fetch(reorderUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
           body: JSON.stringify({ ids: ids })
@@ -1268,7 +1328,8 @@ function initSortable() {
         if (!boardID) return;
         const names = Array.from(boardEl.querySelectorAll('.lane[data-lane]'))
           .map(el => el.dataset.lane);
-        fetch(`/api/v1/boards/${boardID}/lanes/reorder`, {
+        const wsID = _getWorkspaceId();
+        fetch(_apiBoardPath(wsID, boardID) + '/lanes/reorder', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
           body: JSON.stringify({ names })
@@ -1376,7 +1437,8 @@ function _autoOpenCardFromUrl() {
   if (!cardId) return;
   var boardId = _extractBoardIdFromPath();
   if (!boardId) return;
-  fetch(`/ui/modals/card/${cardId}/boards/${boardId}`, {
+  var wsID = _extractWorkspaceIdFromPath();
+  fetch('/ui/modals/card/' + cardId + '/boards/' + boardId + '?ws=' + wsID, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(function(r) {
     if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
@@ -1447,7 +1509,8 @@ window.addEventListener('popstate', function() {
   }
   var boardId = _extractBoardIdFromPath();
   if (!boardId) return;
-  fetch(`/ui/modals/card/${cardId}/boards/${boardId}`, {
+  var wsID = _extractWorkspaceIdFromPath();
+  fetch('/ui/modals/card/' + cardId + '/boards/' + boardId + '?ws=' + wsID, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(function(r) {
     if (!r.ok) return;
@@ -1466,16 +1529,21 @@ window.addEventListener('popstate', function() {
 
 var ARCHIVED_LS_KEY = 'bankan.visible-archived-boards';
 
+function _archivedLsKey() {
+  var wsID = _getWorkspaceId() || _extractWorkspaceIdFromPath();
+  return wsID ? 'bankan.ws.' + wsID + '.visible-archived-boards' : ARCHIVED_LS_KEY;
+}
+
 function _getVisibleArchivedIDs() {
   try {
-    var val = localStorage.getItem(ARCHIVED_LS_KEY);
+    var val = localStorage.getItem(_archivedLsKey());
     return val ? JSON.parse(val) : [];
   } catch (_) { return []; }
 }
 
 function _setVisibleArchivedIDs(ids) {
   try {
-    localStorage.setItem(ARCHIVED_LS_KEY, JSON.stringify(ids));
+    localStorage.setItem(_archivedLsKey(), JSON.stringify(ids));
   } catch (_) {}
 }
 
@@ -1499,8 +1567,34 @@ function initArchivedBoardsVisibility() {
   _syncArchivedDropdownItems();
 }
 
+// Pure logic: should the "No hidden boards" placeholder be visible?
+function _shouldShowDropdownEmptyMsg(hasHiddenItems, anyArchivedInDropdown) {
+  return !hasHiddenItems && !anyArchivedInDropdown;
+}
+
+// Pure logic: resolve the URL to navigate to after hiding the active board.
+// When the server sends a workspace-root URL (no active boards remain), prefer
+// the first visible archived tab href so the user lands on content, not an empty page.
+function _resolveHideActiveTabNavigation(serverTarget, firstArchivedTabHref) {
+  if (firstArchivedTabHref && /^\/ui\/workspaces\/[^\/]+$/.test(serverTarget)) {
+    return firstArchivedTabHref;
+  }
+  return serverTarget;
+}
+
+// Returns the first archived-view tab that is currently visible in the tab bar,
+// or null if none are shown.
+function _firstVisibleArchivedTab() {
+  var tabs = document.querySelectorAll('.board-tab-archived[data-archived-id]');
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].style.display !== 'none') return tabs[i];
+  }
+  return null;
+}
+
 // Hides dropdown items for archived boards that are already visible in the tab
-// bar, and shows the section title only when at least one item is visible.
+// bar, shows the archived-views section title only when at least one item is
+// visible, and owns the "No hidden boards" placeholder visibility.
 function _syncArchivedDropdownItems() {
   var visible = _getVisibleArchivedIDs();
   var activeTab = document.querySelector('.board-tab-archived.active');
@@ -1508,17 +1602,35 @@ function _syncArchivedDropdownItems() {
     var aid = activeTab.dataset.archivedId;
     if (visible.indexOf(aid) === -1) { visible.push(aid); }
   }
-  var anyVisible = false;
+  var anyArchivedInDropdown = false;
   document.querySelectorAll('[data-archived-item-id]').forEach(function(item) {
     if (visible.indexOf(item.dataset.archivedItemId) !== -1) {
       item.style.display = 'none';
     } else {
       item.style.display = '';
-      anyVisible = true;
+      anyArchivedInDropdown = true;
     }
   });
   var title = document.getElementById('archived-views-section-title');
-  if (title) { title.style.display = anyVisible ? '' : 'none'; }
+  if (title) { title.style.display = anyArchivedInDropdown ? '' : 'none'; }
+
+  var hasHiddenItems = document.querySelectorAll('[data-hidden-item-id]').length > 0;
+  var showEmpty = _shouldShowDropdownEmptyMsg(hasHiddenItems, anyArchivedInDropdown);
+  var panel = document.getElementById('boards-overflow-panel');
+  if (!panel) return;
+  var emptyMsg = panel.querySelector('.overflow-panel-empty');
+  if (showEmpty) {
+    if (!emptyMsg) {
+      // Case: page loaded with hidden boards; all were restored; recreate the element.
+      emptyMsg = document.createElement('div');
+      emptyMsg.className = 'overflow-panel-empty';
+      emptyMsg.textContent = 'No hidden boards';
+      panel.insertBefore(emptyMsg, document.getElementById('archived-views-section-title') || null);
+    }
+    emptyMsg.style.display = '';
+  } else if (emptyMsg) {
+    emptyMsg.style.display = 'none';
+  }
 }
 
 // Toggles the unified boards overflow dropdown panel (hidden boards + archived views).
@@ -1538,10 +1650,9 @@ function showArchivedTab(event, id) {
   if (ids.indexOf(id) === -1) { ids.push(id); }
   _setVisibleArchivedIDs(ids);
   _syncArchivedDropdownItems();
-  // Navigate to the board.
-  if (event) {
-    var href = event.currentTarget ? event.currentTarget.getAttribute('href') : null;
-    if (href) { window.location.href = href; }
+  if (!document.getElementById('board-view')) {
+    var wsID = _getWorkspaceId() || _extractWorkspaceIdFromPath();
+    window.location.href = _uiBoardPath(wsID, id);
   }
 }
 
@@ -1569,7 +1680,8 @@ function hideArchivedTab(event, id) {
 // If the board was the currently active one, the server returns a navigate_to target.
 function hideBoard(event, id) {
   if (event) { event.stopPropagation(); event.preventDefault(); }
-  fetch('/ui/boards/' + id + '/hide', {
+  const wsID = _getWorkspaceId() || _extractWorkspaceIdFromPath();
+  fetch(_uiBoardPath(wsID, id) + '/hide', {
     method: 'POST',
     headers: { 'X-Bankan-Token': getToken(), 'HX-Current-URL': location.href }
   }).then(function(r) {
@@ -1577,16 +1689,59 @@ function hideBoard(event, id) {
     if (tab) tab.style.display = 'none';
     if (r.status === 200) {
       return r.json().then(function(data) {
-        if (data.navigate_to) {
-          window.location.href = '/ui/boards/' + data.navigate_to;
-        } else {
-          window.location.href = '/';
+        var navigateTo = data.navigate_to || '/';
+        // If all boards are hidden the server sends us to the workspace root.
+        // Clear the stale last-board entry so returning to this workspace later
+        // shows NoActiveBoardsPage rather than the now-hidden board.
+        var wsRootMatch = navigateTo.match(/^\/ui\/workspaces\/([^\/]+)$/);
+        if (wsRootMatch) {
+          sessionStorage.removeItem('bankan.ws.' + wsRootMatch[1] + '.last-board');
         }
+        var archivedTab = _firstVisibleArchivedTab();
+        window.location.href = _resolveHideActiveTabNavigation(
+          navigateTo,
+          archivedTab ? archivedTab.getAttribute('href') : null
+        );
       });
+    }
+    // 204: a non-active board was hidden — no page reload, so update the dropdown manually.
+    if (r.status === 204 && tab) {
+      _addHiddenBoardToDropdown(id, tab.dataset.boardName || id, !!tab.querySelector('.view-badge'));
     }
   }).catch(function(e) {
     showToast(e.message, 'error');
   });
+}
+
+// Inserts a newly-hidden board into the overflow dropdown panel without reloading.
+function _addHiddenBoardToDropdown(id, name, isView) {
+  var panel = document.getElementById('boards-overflow-panel');
+  if (!panel) return;
+  // Hide (not remove) the empty-state placeholder so _syncArchivedDropdownItems can restore it.
+  var emptyMsg = panel.querySelector('.overflow-panel-empty');
+  if (emptyMsg) { emptyMsg.style.display = 'none'; }
+  // Insert the "Hidden boards" section title only if it doesn't exist yet (idempotent).
+  if (!panel.querySelector('.overflow-panel-section-title:not(#archived-views-section-title)')) {
+    var titleEl = document.createElement('div');
+    titleEl.className = 'overflow-panel-section-title';
+    titleEl.textContent = 'Hidden boards';
+    panel.insertBefore(titleEl, emptyMsg || document.getElementById('archived-views-section-title') || null);
+  }
+  // Build the dropdown item.
+  var item = document.createElement('a');
+  item.className = 'overflow-board-item';
+  item.dataset.hiddenItemId = id;
+  item.href = '#';
+  item.setAttribute('onclick', "showBoardFromDropdown(event, '" + id + "')");
+  item.appendChild(document.createTextNode(name));
+  if (isView) {
+    var badge = document.createElement('span');
+    badge.className = 'view-badge';
+    badge.textContent = 'view';
+    item.appendChild(badge);
+  }
+  // Insert before the archived-views section (or at the end of the panel).
+  panel.insertBefore(item, document.getElementById('archived-views-section-title') || null);
 }
 
 // Restores a hidden board to the tab bar (server-side persistence).
@@ -1595,7 +1750,8 @@ function hideBoard(event, id) {
 function showBoardFromDropdown(event, id) {
   if (event) event.preventDefault();
   toggleBoardsOverflowPanel();
-  fetch('/ui/boards/' + id + '/show', {
+  const wsID = _getWorkspaceId() || _extractWorkspaceIdFromPath();
+  fetch(_uiBoardPath(wsID, id) + '/show', {
     method: 'POST',
     headers: { 'X-Bankan-Token': getToken() }
   }).then(function(r) {
@@ -1608,9 +1764,19 @@ function showBoardFromDropdown(event, id) {
       tab.removeAttribute('data-hidden-id');
       tab.dataset.boardId = id;
     }
+    // Remove the board from the hidden-boards section of the overflow dropdown.
+    var dropdownItem = document.querySelector('[data-hidden-item-id="' + id + '"]');
+    if (dropdownItem) dropdownItem.remove();
+    // Remove the "Hidden boards" section title if no hidden items remain.
+    var panel = document.getElementById('boards-overflow-panel');
+    if (panel && panel.querySelectorAll('[data-hidden-item-id]').length === 0) {
+      var hiddenTitle = panel.querySelector('.overflow-panel-section-title:not(#archived-views-section-title)');
+      if (hiddenTitle) hiddenTitle.remove();
+    }
+    _syncArchivedDropdownItems();
     // On the empty state page (no board content rendered), navigate to the restored board.
     if (!document.getElementById('board-view')) {
-      window.location.href = '/ui/boards/' + id;
+      window.location.href = _uiBoardPath(wsID, id);
     }
   }).catch(function(e) {
     showToast(e.message, 'error');
@@ -1619,7 +1785,8 @@ function showBoardFromDropdown(event, id) {
 
 // Opens the archive-view-board confirmation dialog by fetching it from the server.
 function openArchiveViewBoardDialog(boardID, boardName, filterLabelID) {
-  fetch('/ui/modals/archive-view-board/' + boardID, {
+  const wsID = _getWorkspaceId();
+  fetch('/ui/modals/archive-view-board/' + boardID + '?ws=' + wsID, {
     headers: { 'X-Bankan-Token': getToken() }
   }).then(function(r) {
     if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
@@ -1636,7 +1803,8 @@ function confirmArchiveViewBoard(boardID) {
   var archiveLabel = false;
   var chk = document.getElementById('archive-vb-label-chk');
   if (chk) archiveLabel = chk.checked;
-  fetch('/api/v1/boards/' + boardID + '/archive', {
+  const wsID = _getWorkspaceId();
+  fetch(_apiBoardPath(wsID, boardID) + '/archive', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Bankan-Token': getToken() },
     body: JSON.stringify({ archive_label: archiveLabel })
@@ -1649,6 +1817,38 @@ function confirmArchiveViewBoard(boardID) {
     showToast(e.message, 'error');
   });
 }
+
+// ── Workspace selector ────────────────────────────────────────────────────
+function toggleWorkspacePanel() {
+  var panel = document.getElementById('workspace-panel');
+  if (!panel) return;
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+}
+
+function switchWorkspace(event, targetWsID) {
+  if (event) event.preventDefault();
+  // Save current board for current workspace.
+  var currentWsID = _getWorkspaceId() || _extractWorkspaceIdFromPath();
+  var currentBoardID = _extractBoardIdFromPath();
+  if (currentWsID && currentBoardID) {
+    sessionStorage.setItem('bankan.ws.' + currentWsID + '.last-board', currentBoardID);
+  }
+  // Navigate to last board in target workspace, or workspace root (server redirects to first board).
+  var lastBoard = sessionStorage.getItem('bankan.ws.' + targetWsID + '.last-board');
+  if (lastBoard) {
+    window.location.href = '/ui/workspaces/' + targetWsID + '/boards/' + lastBoard;
+  } else {
+    window.location.href = '/ui/workspaces/' + targetWsID;
+  }
+}
+
+// Close workspace panel on outside click.
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#workspace-selector')) {
+    var panel = document.getElementById('workspace-panel');
+    if (panel) panel.style.display = 'none';
+  }
+});
 
 // Opens the static markdown syntax cheatsheet modal.
 // Saves the current #modal-target content and restores it on close, so that

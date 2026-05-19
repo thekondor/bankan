@@ -4,12 +4,23 @@ set -euo pipefail
 BANKAN="${BANKAN:-go run ./cmd/bankan}"
 DEMO_DIR="${DEMO_DIR:-demo}"
 
+# Two workspace directories demonstrating multi-workspace support.
+#
+# Workspace "Product" ─ $DEMO_DIR/product/
+#   website-redesign, mobile-app, internal-planning (hidden),
+#   frontend-sprint (view, active), hotfix-sprint (view, archived)
+#
+# Workspace "Ops" ─ $DEMO_DIR/ops/
+#   q3-infra
+#
+# Start: bankan serve "Product:$DEMO_DIR/product" "Ops:$DEMO_DIR/ops"
+
 rm -rf "$DEMO_DIR"
-mkdir -p "$DEMO_DIR"
+mkdir -p "$DEMO_DIR/product" "$DEMO_DIR/ops"
 
-# ── Board 1: Website Redesign ─────────────────────────────────────────────────
+# ── Board 1: Website Redesign (Product workspace) ─────────────────────────────
 
-b="$DEMO_DIR/website-redesign"
+b="$DEMO_DIR/product/website-redesign"
 mkdir -p "$b"
 $BANKAN board init "$b" --name "Website Redesign"
 
@@ -86,9 +97,9 @@ wr_arc2=$($BANKAN card add --board "$b" --lane "Design" \
   --label "$l_ux" | awk '{print $2}')
 $BANKAN card archive "$wr_arc2" --board "$b"
 
-# ── Board 2: Mobile App v2.0 ──────────────────────────────────────────────────
+# ── Board 2: Mobile App v2.0 (Product workspace) ──────────────────────────────
 
-b="$DEMO_DIR/mobile-app"
+b="$DEMO_DIR/product/mobile-app"
 mkdir -p "$b"
 $BANKAN board init "$b" --name "Mobile App v2.0"
 
@@ -161,9 +172,9 @@ ma_arc3=$($BANKAN card add --board "$b" --lane "Review" \
   --label "$l_enh" | awk '{print $2}')
 $BANKAN card archive "$ma_arc3" --board "$b"
 
-# ── Board 3: Q3 Infrastructure ────────────────────────────────────────────────
+# ── Board 3: Q3 Infrastructure (Ops workspace) ───────────────────────────────
 
-b="$DEMO_DIR/q3-infra"
+b="$DEMO_DIR/ops/q3-infra"
 mkdir -p "$b"
 $BANKAN board init "$b" --name "Q3 Infrastructure"
 
@@ -225,9 +236,9 @@ qi_arc2=$($BANKAN card add --board "$b" --lane "Doing" \
   --label "$l_prf" | awk '{print $2}')
 $BANKAN card archive "$qi_arc2" --board "$b"
 
-# ── Board 4: Internal Planning (hidden) ───────────────────────────────────────
+# ── Board 4: Internal Planning (hidden, Product workspace) ────────────────────
 
-b="$DEMO_DIR/internal-planning"
+b="$DEMO_DIR/product/internal-planning"
 mkdir -p "$b"
 $BANKAN board init "$b" --name "Internal Planning"
 
@@ -297,27 +308,26 @@ $BANKAN card add --board "$b" --lane "Done" \
   --body $'Onboarding docs updated, 90-day plans agreed, dev environments set up.\n\nBoth engineers are ramped — closed.' \
   --label "$l_eng"
 
-$BANKAN board hide "internal-planning" --root "$DEMO_DIR"
+$BANKAN board hide "internal-planning" --root "$DEMO_DIR/product"
 
-# ── View Board 1: Frontend Sprint (active) — filtered from Website Redesign ───
+# ── View Board 1: Frontend Sprint (active, Product workspace) ─────────────────
 
-vb1="$DEMO_DIR/frontend-sprint"
+vb1="$DEMO_DIR/product/frontend-sprint"
 mkdir -p "$vb1"
 $BANKAN board view create "$vb1" \
-  --parent "$DEMO_DIR/website-redesign" \
+  --parent "$DEMO_DIR/product/website-redesign" \
   --label "$l_fe" \
   --name "Frontend Sprint"
 $BANKAN board view sync --board "$vb1"
 
-# add a view-only lane and move a stub into it
 $BANKAN lane add "Sprint Ice Box" --board "$vb1"
 
-# ── View Board 2: Hotfix Sprint (archived with archive-label) — filtered from Mobile App ──
+# ── View Board 2: Hotfix Sprint (archived, Product workspace) ─────────────────
 
-vb2="$DEMO_DIR/hotfix-sprint"
+vb2="$DEMO_DIR/product/hotfix-sprint"
 mkdir -p "$vb2"
 $BANKAN board view create "$vb2" \
-  --parent "$DEMO_DIR/mobile-app" \
+  --parent "$DEMO_DIR/product/mobile-app" \
   --label "$l_crt" \
   --name "Hotfix Sprint v1.9"
 $BANKAN board view sync --board "$vb2"
@@ -325,8 +335,15 @@ $BANKAN board view archive --board "$vb2" --archive-label
 
 echo ""
 echo "Demo boards created in $DEMO_DIR/"
-echo "  Boards:      website-redesign, mobile-app, q3-infra"
-echo "  Hidden:      internal-planning"
-echo "  View active: frontend-sprint (filtered: Frontend label on website-redesign)"
-echo "  View archived: hotfix-sprint (filtered: Critical label on mobile-app, label prefixed)"
+echo ""
+echo "  Workspace 'Product' ($DEMO_DIR/product/):"
+echo "    Boards:        website-redesign, mobile-app"
+echo "    Hidden:        internal-planning"
+echo "    View active:   frontend-sprint (filtered: Frontend label on website-redesign)"
+echo "    View archived: hotfix-sprint   (filtered: Critical label on mobile-app, label prefixed)"
+echo ""
+echo "  Workspace 'Ops' ($DEMO_DIR/ops/):"
+echo "    Boards:        q3-infra"
+echo ""
 echo "  Run: mise run demo-serve"
+echo "  Or:  go run ./cmd/bankan serve --port 9091 \"Product:$DEMO_DIR/product\" \"Ops:$DEMO_DIR/ops\""

@@ -108,6 +108,7 @@ templ CardDetailModal(data CardDetailData) {
 						data-board={ data.BoardID }
 						data-card={ data.Card.ID }
 						data-token={ data.Token }
+						data-workspace={ data.WorkspaceID }
 					>
 						<textarea name="body" placeholder="Add a comment…" style="min-height:60px"></textarea>
 						<input type="text" name="author" placeholder="Your name (optional)"/>
@@ -182,7 +183,7 @@ templ CommentItem(cm bankan.Comment, isReadonly bool) {
 // CardNotInViewModal is shown when a card permalink from a view board is opened
 // but the card's stub has been removed from the view — yet the card still exists
 // on the parent board. It offers a direct link to the card on the parent board.
-templ CardNotInViewModal(cardID string, parentBoardID string, parentBoardName string) {
+templ CardNotInViewModal(cardID string, wsID string, parentBoardID string, parentBoardName string) {
 	<div class="modal-backdrop" id="card-not-in-view-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:400px">
 			<div class="modal-header">
@@ -198,8 +199,8 @@ templ CardNotInViewModal(cardID string, parentBoardID string, parentBoardName st
 					<button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button>
 					<a
 						class="btn btn-primary btn-sm"
-						href={ templ.SafeURL("/ui/boards/" + parentBoardID + "?card=" + cardID) }
-						onclick={ templ.ComponentScript{Call: "event.preventDefault(); navigatePreservingComment('/ui/boards/" + parentBoardID + "?card=" + cardID + "')"} }
+						href={ templ.SafeURL("/ui/workspaces/" + wsID + "/boards/" + parentBoardID + "?card=" + cardID) }
+						onclick={ templ.ComponentScript{Call: "event.preventDefault(); navigatePreservingComment('/ui/workspaces/" + wsID + "/boards/" + parentBoardID + "?card=" + cardID + "')"} }
 					>Open in parent board →</a>
 				</div>
 			</div>
@@ -207,7 +208,7 @@ templ CardNotInViewModal(cardID string, parentBoardID string, parentBoardName st
 	</div>
 }
 
-templ MoveCardModal(card *bankan.Card, boardID string, lanes []bankan.Lane, token string) {
+templ MoveCardModal(card *bankan.Card, wsID string, boardID string, lanes []bankan.Lane, token string) {
 	<div class="modal-backdrop" id="move-card-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:360px">
 			<div class="modal-header">
@@ -235,7 +236,7 @@ templ MoveCardModal(card *bankan.Card, boardID string, lanes []bankan.Lane, toke
 // UnarchiveCardModal renders a lane-picker for restoring an archived card.
 // The user selects a lane; an HTMX POST is sent to restore the card and the
 // board view is swapped back, preserving show_archived state via HX-Current-URL.
-templ UnarchiveCardModal(card *bankan.Card, boardID string, lanes []bankan.Lane, token string) {
+templ UnarchiveCardModal(card *bankan.Card, wsID string, boardID string, lanes []bankan.Lane, token string) {
 	<div class="modal-backdrop" id="unarchive-card-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:360px">
 			<div class="modal-header">
@@ -258,7 +259,7 @@ templ UnarchiveCardModal(card *bankan.Card, boardID string, lanes []bankan.Lane,
 	</div>
 }
 
-templ EditCardModal(card *bankan.Card, boardID string, labels []bankan.Label, token string) {
+templ EditCardModal(card *bankan.Card, wsID string, boardID string, labels []bankan.Label, token string) {
 	<div class="modal-backdrop" id="edit-card-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:480px">
 			<div class="modal-header">
@@ -351,7 +352,7 @@ func containsLabel(labels []string, id string) bool {
 	return false
 }
 
-templ AddBoardModal(token string, regularBoards []BoardData, currentBoardID string) {
+templ AddBoardModal(wsID string, token string, regularBoards []BoardData, currentBoardID string) {
 	<div class="modal-backdrop" id="add-board-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:400px">
 			<div class="modal-header">
@@ -420,7 +421,7 @@ templ ViewBoardFilterLabelOptions(labels []bankan.Label) {
 	}
 }
 
-templ ManageLabelsModal(boardID string, labels []bankan.Label, token string) {
+templ ManageLabelsModal(wsID string, boardID string, labels []bankan.Label, token string) {
 	<div class="modal-backdrop" id="manage-labels-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:500px">
 			<div class="modal-header">
@@ -588,7 +589,7 @@ templ ManageLabelsModal(boardID string, labels []bankan.Label, token string) {
 	</div>
 }
 
-templ AddLabelModal(boardID string, token string) {
+templ AddLabelModal(wsID string, boardID string, token string) {
 	<div class="modal-backdrop" id="add-label-modal" onclick="closeModalOnBackdrop(event)">
 		<div class="modal" style="max-width:360px">
 			<div class="modal-header">
@@ -598,7 +599,7 @@ templ AddLabelModal(boardID string, token string) {
 			<div class="modal-body">
 				<form
 					style="display:flex;flex-direction:column;gap:10px"
-					hx-post={ "/ui/boards/" + boardID + "/labels" }
+					hx-post={ "/ui/workspaces/" + wsID + "/boards/" + boardID + "/labels" }
 					hx-target="#board-view"
 					hx-swap="outerHTML"
 					hx-headers={ `{"X-Bankan-Token":"` + token + `"}` }

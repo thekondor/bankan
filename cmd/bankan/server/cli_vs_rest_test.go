@@ -392,7 +392,7 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	bid := filepath.Base(boardDir) // "sprint-board"
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -409,7 +409,7 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	// Poll until the server responds to health-check GET.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/api/v1/boards")
+		resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -419,7 +419,7 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	// Confirm server is actually up before proceeding.
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -454,14 +454,14 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	}
 
 	addLabel := func(name, color string) {
-		res := restDo("POST", "/api/v1/boards/"+bid+"/labels",
+		res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/labels",
 			map[string]any{"name": name, "color": color})
 		require.Equal(t, http.StatusCreated, res.StatusCode)
 		labelIDs[name] = decodeMap(res)["id"].(string)
 	}
 
 	addLane := func(name string) {
-		res := restDo("POST", "/api/v1/boards/"+bid+"/lanes",
+		res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/lanes",
 			map[string]any{"name": name})
 		require.Equal(t, http.StatusCreated, res.StatusCode)
 		_ = res.Body.Close()
@@ -472,7 +472,7 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 		for _, n := range labelNames {
 			lids = append(lids, labelIDs[n])
 		}
-		res := restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+		res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/cards", map[string]any{
 			"lane": lane, "title": title, "body": body, "label_ids": lids,
 		})
 		require.Equal(t, http.StatusCreated, res.StatusCode)
@@ -481,7 +481,7 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 
 	renameCard := func(oldTitle, newTitle string) {
 		cid := cardIDs[oldTitle]
-		res := restDo("PATCH", fmt.Sprintf("/api/v1/boards/%s/cards/%s", bid, cid),
+		res := restDo("PATCH", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", bid, cid),
 			map[string]any{"title": newTitle})
 		require.Equal(t, http.StatusOK, res.StatusCode)
 		_ = res.Body.Close()
@@ -490,41 +490,41 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	}
 
 	addCardLabel := func(title, labelName string) {
-		res := restDo("PATCH", fmt.Sprintf("/api/v1/boards/%s/cards/%s", bid, cardIDs[title]),
+		res := restDo("PATCH", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", bid, cardIDs[title]),
 			map[string]any{"add_labels": []string{labelIDs[labelName]}})
 		require.Equal(t, http.StatusOK, res.StatusCode)
 		_ = res.Body.Close()
 	}
 
 	removeCardLabel := func(title, labelName string) {
-		res := restDo("PATCH", fmt.Sprintf("/api/v1/boards/%s/cards/%s", bid, cardIDs[title]),
+		res := restDo("PATCH", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", bid, cardIDs[title]),
 			map[string]any{"remove_labels": []string{labelIDs[labelName]}})
 		require.Equal(t, http.StatusOK, res.StatusCode)
 		_ = res.Body.Close()
 	}
 
 	moveCard := func(title, toLane string) {
-		res := restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/move", bid, cardIDs[title]),
+		res := restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/move", bid, cardIDs[title]),
 			map[string]any{"to_lane": toLane})
 		require.Equal(t, http.StatusNoContent, res.StatusCode)
 		_ = res.Body.Close()
 	}
 
 	archiveCard := func(title string) {
-		res := restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/archive", bid, cardIDs[title]), nil)
+		res := restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/archive", bid, cardIDs[title]), nil)
 		require.Equal(t, http.StatusNoContent, res.StatusCode)
 		_ = res.Body.Close()
 	}
 
 	restoreCard := func(title, toLane string) {
-		res := restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/restore", bid, cardIDs[title]),
+		res := restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/restore", bid, cardIDs[title]),
 			map[string]any{"to_lane": toLane})
 		require.Equal(t, http.StatusNoContent, res.StatusCode)
 		_ = res.Body.Close()
 	}
 
 	removeLane := func(nameSlug string) {
-		res := restDo("DELETE", "/api/v1/boards/"+bid+"/lanes/"+nameSlug, nil)
+		res := restDo("DELETE", "/api/v1/workspaces/test/boards/"+bid+"/lanes/"+nameSlug, nil)
 		require.Equal(t, http.StatusNoContent, res.StatusCode)
 		_ = res.Body.Close()
 	}
@@ -549,13 +549,13 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	addCard("done", "Database Optimization", "Optimize DB indexes", []string{"Bug", "Backend"})
 
 	// View board + initial sync.
-	res := restDo("POST", "/api/v1/view-boards", map[string]any{
+	res := restDo("POST", "/api/v1/workspaces/test/view-boards", map[string]any{
 		"name": "Feature Sprint", "parent_id": bid, "filter_label_id": labelIDs["Feature"],
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewBoardID := decodeMap(res)["id"].(string) // "feature-sprint"
 
-	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+viewBoardID+"/sync", nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
@@ -572,28 +572,28 @@ func runViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	restoreCard("Database Optimization", "done")
 	removeLane("testing")
 
-	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", bid, cardIDs["Fix Auth Bug"]),
+	res = restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", bid, cardIDs["Fix Auth Bug"]),
 		map[string]any{"author": "tester", "body": "Needs review"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	commentID := decodeMap(res)["id"].(string)
 
-	res = restDo("PATCH", fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments/%s", bid, cardIDs["Fix Auth Bug"], commentID),
+	res = restDo("PATCH", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments/%s", bid, cardIDs["Fix Auth Bug"], commentID),
 		map[string]any{"body": "Needs review asap"})
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	_ = res.Body.Close()
 
 	// 13. Duplicate "Fix Auth Bug"
-	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/duplicate", bid, cardIDs["Fix Auth Bug"]), nil)
+	res = restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/duplicate", bid, cardIDs["Fix Auth Bug"]), nil)
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	cardIDs["[dup] Fix Auth Bug"] = decodeMap(res)["id"].(string)
 
 	// 14. Set "Urgent" as primary label on "Fix Auth Bug"
-	res = restDo("PATCH", fmt.Sprintf("/api/v1/boards/%s/cards/%s", bid, cardIDs["Fix Auth Bug"]),
+	res = restDo("PATCH", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", bid, cardIDs["Fix Auth Bug"]),
 		map[string]any{"primary_label": labelIDs["Urgent"]})
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	_ = res.Body.Close()
 
-	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+viewBoardID+"/sync", nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
@@ -678,7 +678,7 @@ func runArchiveRestoreViaRealREST(t *testing.T) ([]archivedCardSnap, boardSnap) 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	bid := filepath.Base(boardDir) // "archive-test"
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -694,7 +694,7 @@ func runArchiveRestoreViaRealREST(t *testing.T) ([]archivedCardSnap, boardSnap) 
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/api/v1/boards")
+		resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -703,7 +703,7 @@ func runArchiveRestoreViaRealREST(t *testing.T) ([]archivedCardSnap, boardSnap) 
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -733,31 +733,31 @@ func runArchiveRestoreViaRealREST(t *testing.T) ([]archivedCardSnap, boardSnap) 
 	}
 
 	// Add lane and cards
-	res := restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "todo"})
+	res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/lanes", map[string]any{"name": "todo"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/cards", map[string]any{
 		"lane": "todo", "title": "Fix the Bug", "body": "critical",
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	bugCardID := decodeMap(res)["id"].(string)
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/cards", map[string]any{
 		"lane": "todo", "title": "Ship the Feature", "body": "",
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
 	// Archive "Fix the Bug"
-	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/archive", bid, bugCardID), nil)
+	res = restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/archive", bid, bugCardID), nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
 	archivedSnap := takeArchivedSnap(t, boardDir)
 
 	// Restore back to todo
-	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/restore", bid, bugCardID),
+	res = restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/restore", bid, bugCardID),
 		map[string]any{"to_lane": "todo"})
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
@@ -861,7 +861,7 @@ func runViewBoardArchiveViaRealREST(t *testing.T) viewBoardArchiveSnap {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	bid := filepath.Base(boardDir) // "parent-board"
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -877,7 +877,7 @@ func runViewBoardArchiveViaRealREST(t *testing.T) viewBoardArchiveSnap {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		resp, hErr := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if hErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -886,7 +886,7 @@ func runViewBoardArchiveViaRealREST(t *testing.T) viewBoardArchiveSnap {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -916,16 +916,16 @@ func runViewBoardArchiveViaRealREST(t *testing.T) viewBoardArchiveSnap {
 	}
 
 	// Add lane + label + card
-	res := restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "backlog"})
+	res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/lanes", map[string]any{"name": "backlog"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/labels",
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/labels",
 		map[string]any{"name": "Sprint", "color": "#3b82f6"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	labelID := decodeMap(res)["id"].(string)
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/cards", map[string]any{
 		"lane": "backlog", "title": "Sprint Card", "body": "body",
 		"label_ids": []string{labelID},
 	})
@@ -933,20 +933,20 @@ func runViewBoardArchiveViaRealREST(t *testing.T) viewBoardArchiveSnap {
 	_ = res.Body.Close()
 
 	// Create view board
-	res = restDo("POST", "/api/v1/view-boards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/view-boards", map[string]any{
 		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewID := decodeMap(res)["id"].(string)
 
 	// Archive view board with archive_label=true
-	res = restDo("POST", "/api/v1/boards/"+viewID+"/archive",
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+viewID+"/archive",
 		map[string]any{"archive_label": true})
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
 	// Verify mutation is now rejected (403)
-	res = restDo("POST", "/api/v1/boards/"+viewID+"/cards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+viewID+"/cards", map[string]any{
 		"lane": "backlog", "title": "Should Fail",
 	})
 	assert.Equal(t, http.StatusForbidden, res.StatusCode, "archived view board must reject card creation")
@@ -1048,7 +1048,7 @@ func runCardReorderViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	bid := filepath.Base(boardDir) // "reorder-board"
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -1064,7 +1064,7 @@ func runCardReorderViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		resp, hErr := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if hErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -1073,7 +1073,7 @@ func runCardReorderViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1102,17 +1102,17 @@ func runCardReorderViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	}
 
 	// Setup: lane, label, cards.
-	res := restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "Backlog"})
+	res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/lanes", map[string]any{"name": "Backlog"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/labels",
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/labels",
 		map[string]any{"name": "Sprint", "color": "#3b82f6"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	labelID := decodeMap(res)["id"].(string)
 
 	addCard := func(title string, labels []string) string {
-		res := restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+		res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/cards", map[string]any{
 			"lane": "backlog", "title": title, "body": "", "label_ids": labels,
 		})
 		require.Equal(t, http.StatusCreated, res.StatusCode)
@@ -1125,14 +1125,14 @@ func runCardReorderViaRealREST(t *testing.T) (boardSnap, viewBoardSnap) {
 	addCard("Gamma", []string{labelID})
 
 	// Create view board.
-	res = restDo("POST", "/api/v1/view-boards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/view-boards", map[string]any{
 		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewBoardID := decodeMap(res)["id"].(string)
 
 	// Reorder Alpha (view index 0) to view index 2 via the view board endpoint.
-	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/reorder", viewBoardID, alphaID),
+	res = restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/reorder", viewBoardID, alphaID),
 		map[string]any{"new_index": 2})
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
@@ -1239,7 +1239,7 @@ func runBoardReorderViaRealREST(t *testing.T) boardOrderSnap {
 	const token = "test-token"
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -1255,7 +1255,7 @@ func runBoardReorderViaRealREST(t *testing.T) boardOrderSnap {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		resp, hErr := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if hErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -1264,7 +1264,7 @@ func runBoardReorderViaRealREST(t *testing.T) boardOrderSnap {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1287,13 +1287,13 @@ func runBoardReorderViaRealREST(t *testing.T) boardOrderSnap {
 	}
 
 	// Reorder: beta first, alpha second.
-	res := restDo("POST", "/api/v1/boards/reorder",
+	res := restDo("POST", "/api/v1/workspaces/test/boards/reorder",
 		map[string]any{"ids": []string{"board-beta", "board-alpha"}})
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
 	// Verify via the list endpoint (already ordered by display order).
-	res = restDo("GET", "/api/v1/boards", nil)
+	res = restDo("GET", "/api/v1/workspaces/test/boards", nil)
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	var boards []map[string]any
 	require.NoError(t, json.NewDecoder(res.Body).Decode(&boards))
@@ -1392,7 +1392,7 @@ func runHideUnhideViaRealREST(t *testing.T) (afterHide, afterUnhide boardHiddenS
 	const token = "test-token"
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -1408,7 +1408,7 @@ func runHideUnhideViaRealREST(t *testing.T) (afterHide, afterUnhide boardHiddenS
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		resp, hErr := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if hErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -1417,7 +1417,7 @@ func runHideUnhideViaRealREST(t *testing.T) (afterHide, afterUnhide boardHiddenS
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1439,7 +1439,7 @@ func runHideUnhideViaRealREST(t *testing.T) (afterHide, afterUnhide boardHiddenS
 		return res
 	}
 
-	res := restDo("POST", "/api/v1/boards/board-alpha/hide", nil)
+	res := restDo("POST", "/api/v1/workspaces/test/boards/board-alpha/hide", nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
@@ -1449,7 +1449,7 @@ func runHideUnhideViaRealREST(t *testing.T) (afterHide, afterUnhide boardHiddenS
 	require.NoError(t, err)
 	afterHide = boardHiddenSnap{AlphaHidden: bAlpha.Hidden, BetaHidden: bBeta.Hidden}
 
-	res = restDo("POST", "/api/v1/boards/board-alpha/show", nil)
+	res = restDo("POST", "/api/v1/workspaces/test/boards/board-alpha/show", nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
@@ -1556,7 +1556,7 @@ func runLabelArchiveDeleteViaRealREST(t *testing.T) labelListSnap {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	bid := filepath.Base(boardDir)
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -1572,7 +1572,7 @@ func runLabelArchiveDeleteViaRealREST(t *testing.T) labelListSnap {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		resp, hErr := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if hErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -1581,7 +1581,7 @@ func runLabelArchiveDeleteViaRealREST(t *testing.T) labelListSnap {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1611,24 +1611,24 @@ func runLabelArchiveDeleteViaRealREST(t *testing.T) labelListSnap {
 	}
 
 	// Add labels
-	res := restDo("POST", "/api/v1/boards/"+bid+"/labels",
+	res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/labels",
 		map[string]any{"name": "Backlog", "color": "#3b82f6"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	backlogID := decodeMap(res)["id"].(string)
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/labels",
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/labels",
 		map[string]any{"name": "Done", "color": "#22c55e"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	doneID := decodeMap(res)["id"].(string)
 
 	// Default DELETE → archive
-	res = restDo("DELETE", "/api/v1/boards/"+bid+"/labels/"+backlogID, nil)
+	res = restDo("DELETE", "/api/v1/workspaces/test/boards/"+bid+"/labels/"+backlogID, nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
 	// DELETE ?force=true → permanent delete
 	req, _ := http.NewRequest("DELETE",
-		baseURL+"/api/v1/boards/"+bid+"/labels/"+doneID+"?force=true", nil)
+		baseURL+"/api/v1/workspaces/test/boards/"+bid+"/labels/"+doneID+"?force=true", nil)
 	req.Header.Set("X-Bankan-Token", token)
 	res, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -1723,7 +1723,7 @@ func runViewBoardStubRelocationViaRealREST(t *testing.T) viewBoardSnap {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	bid := filepath.Base(boardDir) // "reloc-board"
 
-	serverCmd := exec.Command(bankanBin, "serve", rootDir,
+	serverCmd := exec.Command(bankanBin, "serve", "test:"+rootDir,
 		"--port", strconv.Itoa(port),
 		"--token", token,
 		"--bind", "127.0.0.1")
@@ -1739,7 +1739,7 @@ func runViewBoardStubRelocationViaRealREST(t *testing.T) viewBoardSnap {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, hErr := http.Get(baseURL + "/api/v1/boards")
+		resp, hErr := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 		if hErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -1748,7 +1748,7 @@ func runViewBoardStubRelocationViaRealREST(t *testing.T) viewBoardSnap {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	resp, err := http.Get(baseURL + "/api/v1/boards")
+	resp, err := http.Get(baseURL + "/api/v1/workspaces/test/boards")
 	require.NoError(t, err, "server did not start within 5 seconds")
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1777,40 +1777,40 @@ func runViewBoardStubRelocationViaRealREST(t *testing.T) viewBoardSnap {
 	}
 
 	// Setup: lanes, label, card.
-	res := restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "Backlog"})
+	res := restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/lanes", map[string]any{"name": "Backlog"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/lanes", map[string]any{"name": "Doing"})
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/lanes", map[string]any{"name": "Doing"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	_ = res.Body.Close()
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/labels",
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/labels",
 		map[string]any{"name": "Sprint", "color": "#3b82f6"})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	labelID := decodeMap(res)["id"].(string)
 
-	res = restDo("POST", "/api/v1/boards/"+bid+"/cards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+bid+"/cards", map[string]any{
 		"lane": "backlog", "title": "Sprinted Task", "body": "", "label_ids": []string{labelID},
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	cardID := decodeMap(res)["id"].(string)
 
 	// Create view board.
-	res = restDo("POST", "/api/v1/view-boards", map[string]any{
+	res = restDo("POST", "/api/v1/workspaces/test/view-boards", map[string]any{
 		"name": "Sprint View", "parent_id": bid, "filter_label_id": labelID,
 	})
 	require.Equal(t, http.StatusCreated, res.StatusCode)
 	viewBoardID := decodeMap(res)["id"].(string)
 
 	// Move card in parent board directly (not via view).
-	res = restDo("POST", fmt.Sprintf("/api/v1/boards/%s/cards/%s/move", bid, cardID),
+	res = restDo("POST", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/move", bid, cardID),
 		map[string]any{"to_lane": "doing"})
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 
 	// Sync view: stub must be relocated to Doing.
-	res = restDo("POST", "/api/v1/boards/"+viewBoardID+"/sync", nil)
+	res = restDo("POST", "/api/v1/workspaces/test/boards/"+viewBoardID+"/sync", nil)
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	_ = res.Body.Close()
 

@@ -13,13 +13,13 @@ import (
 // ─── JSON response types ─────────────────────────────────────────────────────
 
 type boardJSON struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Dir       string       `json:"dir"`
-	CreatedAt time.Time    `json:"created_at"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Dir       string         `json:"dir"`
+	CreatedAt time.Time      `json:"created_at"`
 	Labels    []bankan.Label `json:"labels"`
-	IsView    bool         `json:"is_view"`
-	Body      string       `json:"body,omitempty"`
+	IsView    bool           `json:"is_view"`
+	Body      string         `json:"body,omitempty"`
 }
 
 type viewBoardJSON struct {
@@ -83,7 +83,6 @@ func cardToJSON(c *bankan.Card) cardJSON {
 	}
 }
 
-// writeJSON writes a JSON-encoded value with status code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -97,24 +96,42 @@ func decodeJSON(r *http.Request, v any) error {
 }
 
 // rejectArchivedViewBoard writes a 403 if the board id is an archived view board.
-// Returns true when the request was rejected (caller should return immediately).
-func (s *Server) rejectArchivedViewBoard(w http.ResponseWriter, id string) bool {
-	if s.reg.IsArchivedViewBoard(id) {
+func (s *Server) rejectArchivedViewBoard(w http.ResponseWriter, reg *service.Registry, id string) bool {
+	if reg.IsArchivedViewBoard(id) {
 		writeError(w, http.StatusForbidden, "archived view board is read-only")
 		return true
 	}
 	return false
 }
 
+// ─── Workspace handler ────────────────────────────────────────────────────────
+
+// GET /api/v1/workspaces
+func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	type wsJSON struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	result := make([]wsJSON, len(s.workspaces))
+	for i, ws := range s.workspaces {
+		result[i] = wsJSON{ID: ws.ID, Name: ws.Name}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ─── Board handlers ────────────────────────────────────────────────────────
 
-// GET /api/v1/boards
+// GET /api/v1/workspaces/{ws}/boards
 func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
-	boards := s.reg.Boards()
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	boards := ws.Reg.Boards()
 	result := make([]map[string]any, 0, len(boards))
 	for _, bi := range boards {
 		if bi.IsView {
-			vb, parent, err := s.reg.GetViewBoard(bi.ID)
+			vb, parent, err := ws.Reg.GetViewBoard(bi.ID)
 			if err != nil {
 				continue
 			}
@@ -129,7 +146,7 @@ func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
 				"archived_at":  vb.ArchivedAt,
 			})
 		} else {
-			b, err := s.reg.GetBoard(bi.ID)
+			b, err := ws.Reg.GetBoard(bi.ID)
 			if err != nil {
 				continue
 			}
@@ -146,8 +163,12 @@ func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// POST /api/v1/boards/reorder
+// POST /api/v1/workspaces/{ws}/boards/reorder
 func (s *Server) handleReorderBoards(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	var req struct {
 		IDs []string `json:"ids"`
 	}
@@ -159,15 +180,19 @@ func (s *Server) handleReorderBoards(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids is required")
 		return
 	}
-	if err := s.reg.ReorderBoards(req.IDs); err != nil {
+	if err := ws.Reg.ReorderBoards(req.IDs); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards
+// POST /api/v1/workspaces/{ws}/boards
 func (s *Server) handleInitBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -179,12 +204,11 @@ func (s *Server) handleInitBoard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	b, err := s.reg.InitBoard(req.Name)
+	b, err := ws.Reg.InitBoard(req.Name)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	// ID is the directory basename (slugified), which may differ from the display name.
 	writeJSON(w, http.StatusCreated, boardJSON{
 		ID:        filepath.Base(b.Dir),
 		Name:      b.Name,
@@ -194,8 +218,12 @@ func (s *Server) handleInitBoard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/v1/view-boards
+// POST /api/v1/workspaces/{ws}/view-boards
 func (s *Server) handleInitViewBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	var req struct {
 		Name          string `json:"name"`
 		ParentID      string `json:"parent_id"`
@@ -209,7 +237,7 @@ func (s *Server) handleInitViewBoard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name, parent_id, and filter_label_id are required")
 		return
 	}
-	vb, err := s.reg.InitViewBoard(req.Name, req.ParentID, req.FilterLabelID)
+	vb, err := ws.Reg.InitViewBoard(req.Name, req.ParentID, req.FilterLabelID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -225,11 +253,15 @@ func (s *Server) handleInitViewBoard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/v1/boards/{id}
+// GET /api/v1/workspaces/{ws}/boards/{id}
 func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.reg.IsViewBoard(id) {
-		vb, parent, err := s.reg.GetViewBoard(id)
+	if ws.Reg.IsViewBoard(id) {
+		vb, parent, err := ws.Reg.GetViewBoard(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -247,7 +279,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	b, err := s.reg.GetBoard(id)
+	b, err := ws.Reg.GetBoard(id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -264,9 +296,13 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 
 // ─── Lane handlers ────────────────────────────────────────────────────────
 
-// GET /api/v1/boards/{id}/lanes
+// GET /api/v1/workspaces/{ws}/boards/{id}/lanes
 func (s *Server) handleListLanes(w http.ResponseWriter, r *http.Request) {
-	lanes, err := s.reg.ListLanes(boardID(r))
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	lanes, err := ws.Reg.ListLanes(boardID(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -278,10 +314,14 @@ func (s *Server) handleListLanes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// POST /api/v1/boards/{id}/lanes
+// POST /api/v1/workspaces/{ws}/boards/{id}/lanes
 func (s *Server) handleAddLane(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -295,7 +335,7 @@ func (s *Server) handleAddLane(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	l, err := s.reg.AddLane(id, req.Name)
+	l, err := ws.Reg.AddLane(id, req.Name)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -303,10 +343,14 @@ func (s *Server) handleAddLane(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, laneJSON{Name: l.Name, Dir: l.Dir, Order: l.Order})
 }
 
-// PATCH /api/v1/boards/{id}/lanes/{lane}
+// PATCH /api/v1/workspaces/{ws}/boards/{id}/lanes/{lane}
 func (s *Server) handleRenameLane(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -320,30 +364,38 @@ func (s *Server) handleRenameLane(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "new_name is required")
 		return
 	}
-	if err := s.reg.RenameLane(id, laneParam(r), req.NewName); err != nil {
+	if err := ws.Reg.RenameLane(id, laneParam(r), req.NewName); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DELETE /api/v1/boards/{id}/lanes/{lane}
+// DELETE /api/v1/workspaces/{ws}/boards/{id}/lanes/{lane}
 func (s *Server) handleRemoveLane(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	if err := s.reg.RemoveLane(id, laneParam(r)); err != nil {
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	if err := ws.Reg.RemoveLane(id, laneParam(r)); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/lanes/reorder
+// POST /api/v1/workspaces/{ws}/boards/{id}/lanes/reorder
 func (s *Server) handleReorderLanes(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -357,7 +409,7 @@ func (s *Server) handleReorderLanes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "names is required")
 		return
 	}
-	if err := s.reg.ReorderLanes(id, req.Names); err != nil {
+	if err := ws.Reg.ReorderLanes(id, req.Names); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -366,14 +418,18 @@ func (s *Server) handleReorderLanes(w http.ResponseWriter, r *http.Request) {
 
 // ─── Card handlers ────────────────────────────────────────────────────────
 
-// GET /api/v1/boards/{id}/cards?lane=&archived=true
+// GET /api/v1/workspaces/{ws}/boards/{id}/cards?lane=&archived=true
 func (s *Server) handleListCards(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
 	laneName := r.URL.Query().Get("lane")
 	archived := r.URL.Query().Get("archived") == "true"
 
 	if archived {
-		cards, err := s.reg.ListArchivedCards(id)
+		cards, err := ws.Reg.ListArchivedCards(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -387,7 +443,7 @@ func (s *Server) handleListCards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if laneName != "" {
-		cards, err := s.reg.ListCards(id, laneName)
+		cards, err := ws.Reg.ListCards(id, laneName)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -400,14 +456,13 @@ func (s *Server) handleListCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// All lanes.
-	all, err := s.reg.ListAllCards(id)
+	all, err := ws.Reg.ListAllCards(id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	var result []cardJSON
-	lanes, _ := s.reg.ListLanes(id)
+	lanes, _ := ws.Reg.ListLanes(id)
 	for _, lane := range lanes {
 		for _, c := range all[lane.Name] {
 			result = append(result, cardToJSON(c))
@@ -419,10 +474,14 @@ func (s *Server) handleListCards(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// POST /api/v1/boards/{id}/cards
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards
 func (s *Server) handleAddCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -439,7 +498,7 @@ func (s *Server) handleAddCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lane and title are required")
 		return
 	}
-	c, err := s.reg.AddCard(id, req.Lane, req.Title, req.Body, req.LabelIDs)
+	c, err := ws.Reg.AddCard(id, req.Lane, req.Title, req.Body, req.LabelIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -447,9 +506,13 @@ func (s *Server) handleAddCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, cardToJSON(c))
 }
 
-// GET /api/v1/boards/{id}/cards/{cardId}
+// GET /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}
 func (s *Server) handleGetCard(w http.ResponseWriter, r *http.Request) {
-	c, err := s.reg.GetCard(boardID(r), r.PathValue("cardId"))
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	c, err := ws.Reg.GetCard(boardID(r), r.PathValue("cardId"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -457,10 +520,14 @@ func (s *Server) handleGetCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cardToJSON(c))
 }
 
-// PATCH /api/v1/boards/{id}/cards/{cardId}
+// PATCH /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}
 func (s *Server) handleUpdateCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -474,7 +541,7 @@ func (s *Server) handleUpdateCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	c, err := s.reg.UpdateCard(id, r.PathValue("cardId"), service.CardUpdate{
+	c, err := ws.Reg.UpdateCard(id, r.PathValue("cardId"), service.CardUpdate{
 		Title:        req.Title,
 		Body:         req.Body,
 		AddLabels:    req.AddLabels,
@@ -488,10 +555,14 @@ func (s *Server) handleUpdateCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cardToJSON(c))
 }
 
-// DELETE /api/v1/boards/{id}/cards/{cardId}?force=true
+// DELETE /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}?force=true
 func (s *Server) handleDeleteCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "true"
@@ -499,17 +570,21 @@ func (s *Server) handleDeleteCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "add ?force=true to confirm permanent deletion")
 		return
 	}
-	if err := s.reg.DeleteCard(id, r.PathValue("cardId")); err != nil {
+	if err := ws.Reg.DeleteCard(id, r.PathValue("cardId")); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/cards/{cardId}/move
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/move
 func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -523,17 +598,21 @@ func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "to_lane is required")
 		return
 	}
-	if err := s.reg.MoveCard(id, r.PathValue("cardId"), req.ToLane); err != nil {
+	if err := ws.Reg.MoveCard(id, r.PathValue("cardId"), req.ToLane); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/cards/{cardId}/reorder
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/reorder
 func (s *Server) handleReorderCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -547,30 +626,38 @@ func (s *Server) handleReorderCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "new_index must be >= 0")
 		return
 	}
-	if err := s.reg.ReorderCard(id, r.PathValue("cardId"), req.NewIndex); err != nil {
+	if err := ws.Reg.ReorderCard(id, r.PathValue("cardId"), req.NewIndex); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/cards/{cardId}/archive
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/archive
 func (s *Server) handleArchiveCard(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	if err := s.reg.ArchiveCard(id, r.PathValue("cardId")); err != nil {
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	if err := ws.Reg.ArchiveCard(id, r.PathValue("cardId")); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/cards/{cardId}/restore
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/restore
 func (s *Server) handleRestoreCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -584,20 +671,24 @@ func (s *Server) handleRestoreCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "to_lane is required")
 		return
 	}
-	if err := s.reg.RestoreCard(id, r.PathValue("cardId"), req.ToLane); err != nil {
+	if err := ws.Reg.RestoreCard(id, r.PathValue("cardId"), req.ToLane); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/cards/{cardId}/duplicate
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/duplicate
 func (s *Server) handleDuplicateCard(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	c, err := s.reg.DuplicateCard(id, r.PathValue("cardId"))
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	c, err := ws.Reg.DuplicateCard(id, r.PathValue("cardId"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -607,9 +698,13 @@ func (s *Server) handleDuplicateCard(w http.ResponseWriter, r *http.Request) {
 
 // ─── Comment handlers ─────────────────────────────────────────────────────
 
-// GET /api/v1/boards/{id}/cards/{cardId}/comments
+// GET /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/comments
 func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
-	comments, err := s.reg.ListComments(boardID(r), r.PathValue("cardId"))
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	comments, err := ws.Reg.ListComments(boardID(r), r.PathValue("cardId"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -626,10 +721,14 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// POST /api/v1/boards/{id}/cards/{cardId}/comments
+// POST /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/comments
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -644,7 +743,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body is required")
 		return
 	}
-	cm, err := s.reg.AddComment(id, r.PathValue("cardId"), req.Author, req.Body)
+	cm, err := ws.Reg.AddComment(id, r.PathValue("cardId"), req.Author, req.Body)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -657,10 +756,14 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PATCH /api/v1/boards/{id}/cards/{cardId}/comments/{commentId}
+// PATCH /api/v1/workspaces/{ws}/boards/{id}/cards/{cardId}/comments/{commentId}
 func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -674,7 +777,7 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body is required")
 		return
 	}
-	cm, err := s.reg.UpdateComment(boardID(r), r.PathValue("cardId"), r.PathValue("commentId"), req.Body)
+	cm, err := ws.Reg.UpdateComment(boardID(r), r.PathValue("cardId"), r.PathValue("commentId"), req.Body)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -689,9 +792,13 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 
 // ─── Label handlers ────────────────────────────────────────────────────────
 
-// GET /api/v1/boards/{id}/labels
+// GET /api/v1/workspaces/{ws}/boards/{id}/labels
 func (s *Server) handleListLabels(w http.ResponseWriter, r *http.Request) {
-	labels, err := s.reg.ListLabels(boardID(r))
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	labels, err := ws.Reg.ListLabels(boardID(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -702,8 +809,12 @@ func (s *Server) handleListLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, labels)
 }
 
-// POST /api/v1/boards/{id}/labels
+// POST /api/v1/workspaces/{ws}/boards/{id}/labels
 func (s *Server) handleAddLabel(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	var req struct {
 		Name  string `json:"name"`
 		Color string `json:"color"`
@@ -716,7 +827,7 @@ func (s *Server) handleAddLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name and color are required")
 		return
 	}
-	l, err := s.reg.AddLabel(boardID(r), req.Name, req.Color)
+	l, err := ws.Reg.AddLabel(boardID(r), req.Name, req.Color)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -724,8 +835,12 @@ func (s *Server) handleAddLabel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, l)
 }
 
-// PATCH /api/v1/boards/{id}/labels/{labelId}
+// PATCH /api/v1/workspaces/{ws}/boards/{id}/labels/{labelId}
 func (s *Server) handleUpdateLabel(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	var req struct {
 		Name  *string `json:"name"`
 		Color *string `json:"color"`
@@ -734,7 +849,7 @@ func (s *Server) handleUpdateLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	l, err := s.reg.UpdateLabel(boardID(r), r.PathValue("labelId"), service.LabelUpdate{
+	l, err := ws.Reg.UpdateLabel(boardID(r), r.PathValue("labelId"), service.LabelUpdate{
 		Name:  req.Name,
 		Color: req.Color,
 	})
@@ -745,11 +860,14 @@ func (s *Server) handleUpdateLabel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, l)
 }
 
-// DELETE /api/v1/boards/{id}/labels/{labelId}
-// By default archives the label (prefix 💼). Pass ?force=true to permanently delete.
+// DELETE /api/v1/workspaces/{ws}/boards/{id}/labels/{labelId}
 func (s *Server) handleRemoveLabel(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	force := r.URL.Query().Get("force") == "true"
-	if err := s.reg.RemoveLabel(boardID(r), r.PathValue("labelId"), force); err != nil {
+	if err := ws.Reg.RemoveLabel(boardID(r), r.PathValue("labelId"), force); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -758,22 +876,29 @@ func (s *Server) handleRemoveLabel(w http.ResponseWriter, r *http.Request) {
 
 // ─── View board handlers ─────────────────────────────────────────────────────
 
-// POST /api/v1/boards/{id}/sync
+// POST /api/v1/workspaces/{ws}/boards/{id}/sync
 func (s *Server) handleSyncViewBoard(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	if err := s.reg.SyncViewBoard(id); err != nil {
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	if err := ws.Reg.SyncViewBoard(id); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/archive
+// POST /api/v1/workspaces/{ws}/boards/{id}/archive
 func (s *Server) handleArchiveViewBoard(w http.ResponseWriter, r *http.Request) {
-	// Body is optional; decode leniently (no DisallowUnknownFields).
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	var req struct {
 		ArchiveLabel bool `json:"archive_label"`
 	}
@@ -783,25 +908,33 @@ func (s *Server) handleArchiveViewBoard(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if err := s.reg.ArchiveViewBoard(boardID(r), req.ArchiveLabel); err != nil {
+	if err := ws.Reg.ArchiveViewBoard(boardID(r), req.ArchiveLabel); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/hide
+// POST /api/v1/workspaces/{ws}/boards/{id}/hide
 func (s *Server) handleAPIHideBoard(w http.ResponseWriter, r *http.Request) {
-	if err := s.reg.HideBoard(boardID(r)); err != nil {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	if err := ws.Reg.HideBoard(boardID(r)); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/v1/boards/{id}/show
+// POST /api/v1/workspaces/{ws}/boards/{id}/show
 func (s *Server) handleAPIShowBoard(w http.ResponseWriter, r *http.Request) {
-	if err := s.reg.ShowBoard(boardID(r)); err != nil {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	if err := ws.Reg.ShowBoard(boardID(r)); err != nil {
 		writeServiceError(w, err)
 		return
 	}

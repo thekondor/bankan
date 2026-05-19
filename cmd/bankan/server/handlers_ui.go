@@ -31,10 +31,6 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 
 // ─── page builders ────────────────────────────────────────────────────────────
 
-// showArchivedFromRequest returns true when the browser page that triggered
-// the current HTMX request had ?show_archived=true in its URL. HTMX sends the
-// originating page URL in the HX-Current-URL header; for direct (non-HTMX)
-// requests the query param on r.URL is used as a fallback.
 func showArchivedFromRequest(r *http.Request) bool {
 	raw := r.Header.Get("HX-Current-URL")
 	if raw == "" {
@@ -47,23 +43,11 @@ func showArchivedFromRequest(r *http.Request) bool {
 	return u.Query().Get("show_archived") == "true"
 }
 
-// buildBoardPage assembles the full BoardPageData for a given board ID.
-// When showArchived is true, archived cards are loaded and merged back into
-// their original lanes (read-only). Cards whose original lane no longer exists
-// are collected into a virtual "archived" lane appended at the end.
-// buildTabLists returns the three board slices used to render the tab bar.
-// allTabBoards: all non-archived boards (visible + hidden) in registry order so
-//
-//	hidden tabs are in the correct DOM position for client-side restore.
-//
-// archivedViewBoards: archived view boards shown in the overflow dropdown only.
-// hiddenBoards: filtered copy of allTabBoards where IsHidden is true, used only
-//
-//	for the overflow dropdown.
-func (s *Server) buildTabLists() (allTabBoards, archivedViewBoards, hiddenBoards []ui.BoardData) {
-	for _, b := range s.reg.Boards() {
+// buildTabLists returns the three board slices for the tab bar, scoped to ws.
+func (s *Server) buildTabLists(ws *service.Workspace) (allTabBoards, archivedViewBoards, hiddenBoards []ui.BoardData) {
+	for _, b := range ws.Reg.Boards() {
 		if b.IsView {
-			vb, _, err := s.reg.GetViewBoard(b.ID)
+			vb, _, err := ws.Reg.GetViewBoard(b.ID)
 			if err != nil {
 				continue
 			}
@@ -77,7 +61,7 @@ func (s *Server) buildTabLists() (allTabBoards, archivedViewBoards, hiddenBoards
 				}
 			}
 		} else {
-			board, err := s.reg.GetBoard(b.ID)
+			board, err := ws.Reg.GetBoard(b.ID)
 			if err != nil {
 				continue
 			}
@@ -91,40 +75,48 @@ func (s *Server) buildTabLists() (allTabBoards, archivedViewBoards, hiddenBoards
 	return
 }
 
-func (s *Server) buildBoardPage(id string, showArchived bool) (ui.BoardPageData, error) {
-	allTabBoards, archivedViewBoards, hiddenBoards := s.buildTabLists()
+// buildAllWorkspaces converts the server's workspace list to UI types.
+func (s *Server) buildAllWorkspaces(activeWsID string) []ui.WorkspaceData {
+	result := make([]ui.WorkspaceData, len(s.workspaces))
+	for i, ws := range s.workspaces {
+		result[i] = ui.WorkspaceData{
+			ID:       ws.ID,
+			Name:     ws.Name,
+			IsActive: ws.ID == activeWsID,
+		}
+	}
+	return result
+}
 
-	isView := s.reg.IsViewBoard(id)
-	isReadonly := s.reg.IsArchivedViewBoard(id)
+// buildBoardPage assembles the full BoardPageData for a given workspace + board ID.
+func (s *Server) buildBoardPage(ws *service.Workspace, id string, showArchived bool) (ui.BoardPageData, error) {
+	allTabBoards, archivedViewBoards, hiddenBoards := s.buildTabLists(ws)
+
+	isView := ws.Reg.IsViewBoard(id)
+	isReadonly := ws.Reg.IsArchivedViewBoard(id)
 	var filterLabel string
 
-	lanes, err := s.reg.ListLanes(id)
+	lanes, err := ws.Reg.ListLanes(id)
 	if err != nil {
 		return ui.BoardPageData{}, err
 	}
 
 	laneCards := make([]ui.LaneWithCards, len(lanes))
 	for i, lane := range lanes {
-		cards, err := s.reg.ListCards(id, lane.Name)
+		cards, err := ws.Reg.ListCards(id, lane.Name)
 		if err != nil {
 			return ui.BoardPageData{}, err
 		}
 		laneCards[i] = ui.LaneWithCards{Lane: lane, Cards: cards}
 	}
 
-	// When show_archived is requested, load archived cards and merge them into
-	// the board. Each archived card is appended to its original lane's card
-	// list (read-only). Cards whose lane was subsequently deleted are collected
-	// into a virtual lane rendered at the end.
 	if showArchived && !isView {
-		archivedCards, archErr := s.reg.ListArchivedCards(id)
+		archivedCards, archErr := ws.Reg.ListArchivedCards(id)
 		if archErr == nil && len(archivedCards) > 0 {
-			// Build a lookup: lane name → index in laneCards.
 			laneIdx := make(map[string]int, len(laneCards))
 			for i, lc := range laneCards {
 				laneIdx[lc.Lane.Name] = i
 			}
-
 			var orphaned []*bankan.Card
 			for _, c := range archivedCards {
 				if idx, ok := laneIdx[c.ArchivedFrom]; ok {
@@ -133,7 +125,6 @@ func (s *Server) buildBoardPage(id string, showArchived bool) (ui.BoardPageData,
 					orphaned = append(orphaned, c)
 				}
 			}
-			// Orphaned archived cards (original lane deleted) go into a virtual lane.
 			if len(orphaned) > 0 {
 				laneCards = append(laneCards, ui.LaneWithCards{
 					Lane:      bankan.Lane{Name: "archived"},
@@ -144,40 +135,49 @@ func (s *Server) buildBoardPage(id string, showArchived bool) (ui.BoardPageData,
 		}
 	}
 
-	labels, err := s.reg.ListLabels(id)
+	labels, err := ws.Reg.ListLabels(id)
 	if err != nil {
 		labels = nil
 	}
 
 	var currentName, currentColor string
 	if isView {
-		vb, _, err := s.reg.GetViewBoard(id)
+		vb, _, err := ws.Reg.GetViewBoard(id)
 		if err == nil {
 			currentName = vb.Name
 			currentColor = vb.Color
 			filterLabel = vb.FilterLabel
 		}
 	} else {
-		b, err := s.reg.GetBoard(id)
+		b, err := ws.Reg.GetBoard(id)
 		if err == nil {
 			currentName = b.Name
 			currentColor = b.Color
 		}
 	}
 
+	currentWs := ui.WorkspaceData{ID: ws.ID, Name: ws.Name, IsActive: true}
+
 	return ui.BoardPageData{
-		CurrentBoard:       ui.BoardData{ID: id, Name: currentName, IsView: isView, Color: currentColor, IsArchived: isReadonly},
-		AllBoards:          allTabBoards,
-		ArchivedViewBoards: archivedViewBoards,
-		HiddenBoards:       hiddenBoards,
-		Lanes:              laneCards,
-		Labels:             labels,
-		Token:              s.token,
-		IsView:             isView,
-		FilterLabel:        filterLabel,
-		ShowArchived:       showArchived,
-		IsReadonly:         isReadonly,
+		CurrentBoard:        ui.BoardData{ID: id, Name: currentName, IsView: isView, Color: currentColor, IsArchived: isReadonly},
+		CurrentWorkspace:    currentWs,
+		Workspaces:          s.buildAllWorkspaces(ws.ID),
+		AllBoards:           allTabBoards,
+		ArchivedViewBoards:  archivedViewBoards,
+		HiddenBoards:        hiddenBoards,
+		Lanes:               laneCards,
+		Labels:              labels,
+		Token:               s.token,
+		IsView:              isView,
+		FilterLabel:         filterLabel,
+		ShowArchived:        showArchived,
+		IsReadonly:          isReadonly,
 	}, nil
+}
+
+// uiBoardPath builds the UI path for a board in a workspace.
+func uiBoardPath(wsID, boardID string) string {
+	return "/ui/workspaces/" + wsID + "/boards/" + boardID
 }
 
 // ─── UI page handlers ─────────────────────────────────────────────────────────
@@ -188,23 +188,34 @@ func (s *Server) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ids := s.reg.BoardIDs()
-	if len(ids) == 0 {
+	ws := s.firstWorkspace()
+	if ws == nil {
 		w.Header().Set("Content-Type", "text/html")
 		_ = ui.Splash(s.token).Render(r.Context(), w)
 		return
 	}
-	// Redirect to the first board that is visible (not hidden, not an archived view board).
+	// Redirect to first workspace root (which handles board selection).
+	http.Redirect(w, r, "/ui/workspaces/"+ws.ID, http.StatusFound)
+}
+
+// GET /ui/workspaces/{ws}
+func (s *Server) handleUIWorkspaceRoot(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	ids := ws.Reg.BoardIDs()
 	for _, id := range ids {
-		if !s.reg.IsHiddenBoard(id) && !s.reg.IsArchivedViewBoard(id) {
-			http.Redirect(w, r, "/ui/boards/"+id, http.StatusFound)
+		if !ws.Reg.IsHiddenBoard(id) && !ws.Reg.IsArchivedViewBoard(id) {
+			http.Redirect(w, r, uiBoardPath(ws.ID, id), http.StatusFound)
 			return
 		}
 	}
-	// All boards are hidden or archived — show empty state with the tab header so
-	// the user can still access the ▽ dropdown to restore a hidden board.
-	allTabBoards, archivedViewBoards, hiddenBoards := s.buildTabLists()
+	// All boards hidden/archived — show empty state.
+	allTabBoards, archivedViewBoards, hiddenBoards := s.buildTabLists(ws)
 	data := ui.BoardPageData{
+		CurrentWorkspace:   ui.WorkspaceData{ID: ws.ID, Name: ws.Name, IsActive: true},
+		Workspaces:         s.buildAllWorkspaces(ws.ID),
 		AllBoards:          allTabBoards,
 		ArchivedViewBoards: archivedViewBoards,
 		HiddenBoards:       hiddenBoards,
@@ -214,11 +225,22 @@ func (s *Server) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 	_ = ui.NoActiveBoardsPage(data).Render(r.Context(), w)
 }
 
-// GET /ui/boards/{id}
+// GET /ui/workspaces/{ws}/boards/{id}
 func (s *Server) handleUIBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := r.PathValue("id")
+	// Redirect stale/direct URLs that point to a hidden board back to the
+	// workspace root so the user lands on NoActiveBoardsPage rather than
+	// seeing a board with no visible tab.
+	if ws.Reg.IsHiddenBoard(id) {
+		http.Redirect(w, r, "/ui/workspaces/"+ws.ID, http.StatusFound)
+		return
+	}
 	showArchived := r.URL.Query().Get("show_archived") == "true"
-	data, err := s.buildBoardPage(id, showArchived)
+	data, err := s.buildBoardPage(ws, id, showArchived)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -227,40 +249,56 @@ func (s *Server) handleUIBoard(w http.ResponseWriter, r *http.Request) {
 	_ = ui.BoardPage(data).Render(r.Context(), w)
 }
 
-// GET /ui/boards/{id}/lanes/{lane}/cards
+// GET /ui/workspaces/{ws}/boards/{id}/lanes/{lane}/cards
 func (s *Server) handleUILaneCards(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
 	laneName := laneParam(r)
-	cards, err := s.reg.ListCards(id, laneName)
+	cards, err := ws.Reg.ListCards(id, laneName)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
-	isReadonly := s.reg.IsArchivedViewBoard(id)
+	labels, _ := ws.Reg.ListLabels(id)
+	isReadonly := ws.Reg.IsArchivedViewBoard(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.LaneCardsFragment(cards, labels, id, s.token, laneName, s.reg.IsViewBoard(id), isReadonly).Render(r.Context(), w)
+	_ = ui.LaneCardsFragment(cards, labels, ws.ID, id, s.token, laneName, ws.Reg.IsViewBoard(id), isReadonly).Render(r.Context(), w)
 }
 
-// GET /ui/modals/card/{id}/boards/{boardId}
+// GET /ui/modals/card/{id}/boards/{boardId}?ws={wsID}
+// The workspace is provided via ?ws= query param; falls back to searching all workspaces.
 func (s *Server) handleUICardModal(w http.ResponseWriter, r *http.Request) {
-	cardID  := r.PathValue("id")
-	boardID := r.PathValue("boardId")
-	view    := r.URL.Query().Get("view")
+	cardID := r.PathValue("id")
+	bID := r.PathValue("boardId")
+	view := r.URL.Query().Get("view")
 
-	card, err := s.reg.GetCard(boardID, cardID)
+	ws := s.workspaceByID(r.URL.Query().Get("ws"))
+	if ws == nil {
+		// Search all workspaces for the board.
+		for _, candidate := range s.workspaces {
+			if candidate.Reg.HasBoard(bID) {
+				ws = candidate
+				break
+			}
+		}
+	}
+	if ws == nil {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	card, err := ws.Reg.GetCard(bID, cardID)
 	if err != nil {
-		// When a view board permalink is opened but the card stub was removed from
-		// the view, check whether the card still lives on the parent board. If so,
-		// render a helpful modal instead of a plain 404, with a link to the card
-		// on the parent board.
 		var notFound *service.ErrNotFound
-		if errors.As(err, &notFound) && s.reg.IsViewBoard(boardID) {
-			if _, parent, vbErr := s.reg.GetViewBoard(boardID); vbErr == nil {
+		if errors.As(err, &notFound) && ws.Reg.IsViewBoard(bID) {
+			if _, parent, vbErr := ws.Reg.GetViewBoard(bID); vbErr == nil {
 				parentID := filepath.Base(parent.Dir)
-				if _, cardErr := s.reg.GetCard(parentID, cardID); cardErr == nil {
+				if _, cardErr := ws.Reg.GetCard(parentID, cardID); cardErr == nil {
 					w.Header().Set("Content-Type", "text/html")
-					_ = ui.CardNotInViewModal(cardID, parentID, parent.Name).Render(r.Context(), w)
+					_ = ui.CardNotInViewModal(cardID, ws.ID, parentID, parent.Name).Render(r.Context(), w)
 					return
 				}
 			}
@@ -268,41 +306,46 @@ func (s *Server) handleUICardModal(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(boardID)
+	labels, _ := ws.Reg.ListLabels(bID)
 	w.Header().Set("Content-Type", "text/html")
 
 	switch view {
 	case "move":
-		lanes, _ := s.reg.ListLanes(boardID)
-		_ = ui.MoveCardModal(card, boardID, lanes, s.token).Render(r.Context(), w)
+		lanes, _ := ws.Reg.ListLanes(bID)
+		_ = ui.MoveCardModal(card, ws.ID, bID, lanes, s.token).Render(r.Context(), w)
 	case "edit":
-		_ = ui.EditCardModal(card, boardID, labels, s.token).Render(r.Context(), w)
+		_ = ui.EditCardModal(card, ws.ID, bID, labels, s.token).Render(r.Context(), w)
 	case "unarchive":
-		lanes, _ := s.reg.ListLanes(boardID)
-		_ = ui.UnarchiveCardModal(card, boardID, lanes, s.token).Render(r.Context(), w)
+		lanes, _ := ws.Reg.ListLanes(bID)
+		_ = ui.UnarchiveCardModal(card, ws.ID, bID, lanes, s.token).Render(r.Context(), w)
 	default:
-		comments, _ := s.reg.ListComments(boardID, cardID)
+		comments, _ := ws.Reg.ListComments(bID, cardID)
 		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
 			comments[i], comments[j] = comments[j], comments[i]
 		}
 		_ = ui.CardDetailModal(ui.CardDetailData{
-			Card:       card,
-			BoardID:    boardID,
-			Labels:     labels,
-			Comments:   comments,
-			Token:      s.token,
-			IsView:     s.reg.IsViewBoard(boardID),
-			IsReadonly: s.reg.IsArchivedViewBoard(boardID),
+			Card:        card,
+			WorkspaceID: ws.ID,
+			BoardID:     bID,
+			Labels:      labels,
+			Comments:    comments,
+			Token:       s.token,
+			IsView:      ws.Reg.IsViewBoard(bID),
+			IsReadonly:  ws.Reg.IsArchivedViewBoard(bID),
 		}).Render(r.Context(), w)
 	}
 }
 
 // ─── UI mutation handlers (return HTML fragments) ──────────────────────────────
 
-// POST /ui/boards/{id}/cards  → returns card HTML fragment
+// POST /ui/workspaces/{ws}/boards/{id}/cards
 func (s *Server) handleUIAddCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -315,20 +358,24 @@ func (s *Server) handleUIAddCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	c, err := s.reg.AddCard(id, req.Lane, req.Title, req.Body, req.LabelIDs)
+	c, err := ws.Reg.AddCard(id, req.Lane, req.Title, req.Body, req.LabelIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.CardItem(c, labels, id, s.token, s.reg.IsViewBoard(id), false).Render(r.Context(), w)
+	_ = ui.CardItem(c, labels, ws.ID, id, s.token, ws.Reg.IsViewBoard(id), false).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/lanes  → returns full board view HTML
+// POST /ui/workspaces/{ws}/boards/{id}/lanes
 func (s *Server) handleUIAddLane(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	var req struct {
@@ -338,11 +385,11 @@ func (s *Server) handleUIAddLane(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.reg.AddLane(id, req.Name); err != nil {
+	if _, err := ws.Reg.AddLane(id, req.Name); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	data, err := s.buildBoardPage(id, showArchivedFromRequest(r))
+	data, err := s.buildBoardPage(ws, id, showArchivedFromRequest(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -351,48 +398,54 @@ func (s *Server) handleUIAddLane(w http.ResponseWriter, r *http.Request) {
 	_ = ui.BoardViewFragment(data).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/labels → returns manage-labels modal HTML
+// POST /ui/workspaces/{ws}/boards/{id}/labels
 func (s *Server) handleUIAddLabel(w http.ResponseWriter, r *http.Request) {
-	id    := boardID(r)
-	name  := r.FormValue("name")
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
+	name := r.FormValue("name")
 	color := r.FormValue("color")
 	if name == "" || color == "" {
-		// Try JSON
 		var req struct {
 			Name  string `json:"name"`
 			Color string `json:"color"`
 		}
 		_ = decodeJSON(r, &req)
-		name  = req.Name
+		name = req.Name
 		color = req.Color
 	}
-	if _, err := s.reg.AddLabel(id, name, color); err != nil {
+	if _, err := ws.Reg.AddLabel(id, name, color); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.ManageLabelsModal(id, labels, s.token).Render(r.Context(), w)
+	_ = ui.ManageLabelsModal(ws.ID, id, labels, s.token).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/cards/{cardId}/move → returns full board view HTML
+// POST /ui/workspaces/{ws}/boards/{id}/cards/{cardId}/move
 func (s *Server) handleUIMoveCard(w http.ResponseWriter, r *http.Request) {
-	id     := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	cardID := r.PathValue("cardId")
-	// HTMX posts application/x-www-form-urlencoded; hx-vals merges into form params.
 	toLane := r.FormValue("to_lane")
 	if toLane == "" {
 		writeError(w, http.StatusBadRequest, "to_lane is required")
 		return
 	}
-	if err := s.reg.MoveCard(id, cardID, toLane); err != nil {
+	if err := ws.Reg.MoveCard(id, cardID, toLane); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	data, err := s.buildBoardPage(id, showArchivedFromRequest(r))
+	data, err := s.buildBoardPage(ws, id, showArchivedFromRequest(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -401,23 +454,24 @@ func (s *Server) handleUIMoveCard(w http.ResponseWriter, r *http.Request) {
 	_ = ui.BoardViewFragment(data).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/cards/{cardId}/archive
-// When show_archived is active, returns the full board view so the card
-// re-appears in its lane as archived (read-only). Otherwise returns an empty
-// 200 so HTMX / JS can simply remove the card element.
+// POST /ui/workspaces/{ws}/boards/{id}/cards/{cardId}/archive
 func (s *Server) handleUIArchiveCard(w http.ResponseWriter, r *http.Request) {
-	id     := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	cardID := r.PathValue("cardId")
-	if err := s.reg.ArchiveCard(id, cardID); err != nil {
+	if err := ws.Reg.ArchiveCard(id, cardID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
 	if showArchivedFromRequest(r) {
-		data, err := s.buildBoardPage(id, true)
+		data, err := s.buildBoardPage(ws, id, true)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -425,27 +479,27 @@ func (s *Server) handleUIArchiveCard(w http.ResponseWriter, r *http.Request) {
 		_ = ui.BoardViewFragment(data).Render(r.Context(), w)
 		return
 	}
-	// Return empty so JS removes the card element directly.
 	w.WriteHeader(http.StatusOK)
 }
 
-// POST /ui/boards/{id}/cards/{cardId}/restore → restores an archived card and
-// returns the full board view. The show_archived state is preserved from the
-// originating page URL (HX-Current-URL header).
+// POST /ui/workspaces/{ws}/boards/{id}/cards/{cardId}/restore
 func (s *Server) handleUIRestoreCard(w http.ResponseWriter, r *http.Request) {
-	id     := boardID(r)
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
 	cardID := r.PathValue("cardId")
-	// HTMX posts application/x-www-form-urlencoded; hx-vals merges into form params.
 	toLane := r.FormValue("to_lane")
 	if toLane == "" {
 		writeError(w, http.StatusBadRequest, "to_lane is required")
 		return
 	}
-	if err := s.reg.RestoreCard(id, cardID, toLane); err != nil {
+	if err := ws.Reg.RestoreCard(id, cardID, toLane); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	data, err := s.buildBoardPage(id, showArchivedFromRequest(r))
+	data, err := s.buildBoardPage(ws, id, showArchivedFromRequest(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -454,21 +508,22 @@ func (s *Server) handleUIRestoreCard(w http.ResponseWriter, r *http.Request) {
 	_ = ui.BoardViewFragment(data).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/cards/{cardId}/duplicate → duplicates card and returns
-// the updated board view fragment so the new card is immediately visible.
-// The new card's ID is sent in the X-New-Card-ID header so the client can open
-// the edit modal without needing a separate round-trip.
+// POST /ui/workspaces/{ws}/boards/{id}/cards/{cardId}/duplicate
 func (s *Server) handleUIDuplicateCard(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	c, err := s.reg.DuplicateCard(id, r.PathValue("cardId"))
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	c, err := ws.Reg.DuplicateCard(id, r.PathValue("cardId"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	data, err := s.buildBoardPage(id, showArchivedFromRequest(r))
+	data, err := s.buildBoardPage(ws, id, showArchivedFromRequest(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -478,29 +533,35 @@ func (s *Server) handleUIDuplicateCard(w http.ResponseWriter, r *http.Request) {
 	_ = ui.BoardViewFragment(data).Render(r.Context(), w)
 }
 
-// DELETE /ui/boards/{id}/lanes/{lane} → returns empty string (removes lane element)
+// DELETE /ui/workspaces/{ws}/boards/{id}/lanes/{lane}
 func (s *Server) handleUIRemoveLane(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	if err := s.reg.RemoveLane(id, laneParam(r)); err != nil {
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	if err := ws.Reg.RemoveLane(id, laneParam(r)); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	// Return 200 OK with empty body so HTMX outerHTML swap removes the lane element.
-	// (204 No Content would cause HTMX 2.x to skip the swap per its responseHandling config.)
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 }
 
-// DELETE /ui/boards/{id}/cards/{cardId} → returns empty string (removes card)
+// DELETE /ui/workspaces/{ws}/boards/{id}/cards/{cardId}
 func (s *Server) handleUIDeleteCard(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	if err := s.reg.DeleteCard(id, r.PathValue("cardId")); err != nil {
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	if err := ws.Reg.DeleteCard(id, r.PathValue("cardId")); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -508,10 +569,14 @@ func (s *Server) handleUIDeleteCard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// POST /ui/boards/{id}/cards/{cardId}/comment → returns comment HTML fragment
+// POST /ui/workspaces/{ws}/boards/{id}/cards/{cardId}/comment
 func (s *Server) handleUIAddComment(w http.ResponseWriter, r *http.Request) {
-	id     := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	cardID := r.PathValue("cardId")
@@ -526,7 +591,7 @@ func (s *Server) handleUIAddComment(w http.ResponseWriter, r *http.Request) {
 	if req.Author == "" {
 		req.Author = "anonymous"
 	}
-	cm, err := s.reg.AddComment(id, cardID, req.Author, req.Body)
+	cm, err := ws.Reg.AddComment(id, cardID, req.Author, req.Body)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -535,13 +600,17 @@ func (s *Server) handleUIAddComment(w http.ResponseWriter, r *http.Request) {
 	_ = ui.CommentItem(*cm, false).Render(r.Context(), w)
 }
 
-// PATCH /ui/boards/{id}/cards/{cardId}/comments/{commentId} → returns updated comment HTML fragment
+// PATCH /ui/workspaces/{ws}/boards/{id}/cards/{cardId}/comments/{commentId}
 func (s *Server) handleUIUpdateComment(w http.ResponseWriter, r *http.Request) {
-	id        := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	cardID    := r.PathValue("cardId")
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	cardID := r.PathValue("cardId")
 	commentID := r.PathValue("commentId")
 	var req struct {
 		Body string `json:"body"`
@@ -550,7 +619,7 @@ func (s *Server) handleUIUpdateComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cm, err := s.reg.UpdateComment(id, cardID, commentID, req.Body)
+	cm, err := ws.Reg.UpdateComment(id, cardID, commentID, req.Body)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -559,10 +628,14 @@ func (s *Server) handleUIUpdateComment(w http.ResponseWriter, r *http.Request) {
 	_ = ui.CommentItem(*cm, false).Render(r.Context(), w)
 }
 
-// PATCH /ui/boards/{id}/cards/{cardId} → returns updated card HTML fragment
+// PATCH /ui/workspaces/{ws}/boards/{id}/cards/{cardId}
 func (s *Server) handleUIUpdateCard(w http.ResponseWriter, r *http.Request) {
-	id     := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
 		return
 	}
 	cardID := r.PathValue("cardId")
@@ -577,7 +650,7 @@ func (s *Server) handleUIUpdateCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	c, err := s.reg.UpdateCard(id, cardID, service.CardUpdate{
+	c, err := ws.Reg.UpdateCard(id, cardID, service.CardUpdate{
 		Title:        req.Title,
 		Body:         req.Body,
 		AddLabels:    req.AddLabels,
@@ -588,27 +661,35 @@ func (s *Server) handleUIUpdateCard(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.CardItem(c, labels, id, s.token, s.reg.IsViewBoard(id), false).Render(r.Context(), w)
+	_ = ui.CardItem(c, labels, ws.ID, id, s.token, ws.Reg.IsViewBoard(id), false).Render(r.Context(), w)
 }
 
-// GET /ui/modals/add-board
+// GET /ui/modals/add-board?ws={wsID}
 func (s *Server) handleUIAddBoardModal(w http.ResponseWriter, r *http.Request) {
+	ws := s.workspaceByID(r.URL.Query().Get("ws"))
+	if ws == nil {
+		ws = s.firstWorkspace()
+	}
+	if ws == nil {
+		writeError(w, http.StatusNotFound, "no workspace available")
+		return
+	}
 	var regularBoards []ui.BoardData
-	for _, bi := range s.reg.Boards() {
+	for _, bi := range ws.Reg.Boards() {
 		if bi.IsView {
 			continue
 		}
-		b, err := s.reg.GetBoard(bi.ID)
+		b, err := ws.Reg.GetBoard(bi.ID)
 		if err != nil {
 			continue
 		}
 		regularBoards = append(regularBoards, ui.BoardData{ID: bi.ID, Name: b.Name})
 	}
-	currentBoardID := currentRegularBoardID(r, s.reg)
+	currentBoardID := currentRegularBoardID(r, ws.Reg)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.AddBoardModal(s.token, regularBoards, currentBoardID).Render(r.Context(), w)
+	_ = ui.AddBoardModal(ws.ID, s.token, regularBoards, currentBoardID).Render(r.Context(), w)
 }
 
 // currentRegularBoardID returns the board_id query parameter if it refers to
@@ -621,19 +702,27 @@ func currentRegularBoardID(r *http.Request, reg *service.Registry) string {
 	return id
 }
 
-// GET /ui/modals/board-settings/{id}
+// GET /ui/modals/board-settings/{id}?ws={wsID}
 func (s *Server) handleUIBoardSettingsModal(w http.ResponseWriter, r *http.Request) {
+	ws := s.workspaceByID(r.URL.Query().Get("ws"))
+	if ws == nil {
+		ws = s.firstWorkspace()
+	}
+	if ws == nil {
+		writeError(w, http.StatusNotFound, "no workspace available")
+		return
+	}
 	id := r.PathValue("id")
 	var currentColor string
-	if s.reg.IsViewBoard(id) {
-		vb, _, err := s.reg.GetViewBoard(id)
+	if ws.Reg.IsViewBoard(id) {
+		vb, _, err := ws.Reg.GetViewBoard(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
 		currentColor = vb.Color
 	} else {
-		b, err := s.reg.GetBoard(id)
+		b, err := ws.Reg.GetBoard(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -641,11 +730,15 @@ func (s *Server) handleUIBoardSettingsModal(w http.ResponseWriter, r *http.Reque
 		currentColor = b.Color
 	}
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.BoardSettingsModal(id, currentColor, s.token).Render(r.Context(), w)
+	_ = ui.BoardSettingsModal(ws.ID, id, currentColor, s.token).Render(r.Context(), w)
 }
 
-// PATCH /ui/boards/{id}/color
+// PATCH /ui/workspaces/{ws}/boards/{id}/color
 func (s *Server) handleUIUpdateBoardColor(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
 	var req struct {
 		Color string `json:"color"`
@@ -654,11 +747,11 @@ func (s *Server) handleUIUpdateBoardColor(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.reg.UpdateBoardColor(id, req.Color); err != nil {
+	if err := ws.Reg.UpdateBoardColor(id, req.Color); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	data, err := s.buildBoardPage(id, showArchivedFromRequest(r))
+	data, err := s.buildBoardPage(ws, id, showArchivedFromRequest(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -667,38 +760,58 @@ func (s *Server) handleUIUpdateBoardColor(w http.ResponseWriter, r *http.Request
 	_ = ui.BoardPage(data).Render(r.Context(), w)
 }
 
-// GET /ui/modals/manage-labels/{boardId}
+// GET /ui/modals/manage-labels/{boardId}?ws={wsID}
 func (s *Server) handleUIManageLabelsModal(w http.ResponseWriter, r *http.Request) {
+	ws := s.workspaceByID(r.URL.Query().Get("ws"))
+	if ws == nil {
+		ws = s.firstWorkspace()
+	}
+	if ws == nil {
+		writeError(w, http.StatusNotFound, "no workspace available")
+		return
+	}
 	id := r.PathValue("boardId")
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.ManageLabelsModal(id, labels, s.token).Render(r.Context(), w)
+	_ = ui.ManageLabelsModal(ws.ID, id, labels, s.token).Render(r.Context(), w)
 }
 
-// GET /ui/boards/{id}/label-picker
+// GET /ui/workspaces/{ws}/boards/{id}/label-picker
 func (s *Server) handleUILabelPicker(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
 	_ = ui.LabelPickerFragment(labels).Render(r.Context(), w)
 }
 
-// DELETE /ui/boards/{id}/labels/{labelId}
+// DELETE /ui/workspaces/{ws}/boards/{id}/labels/{labelId}
 func (s *Server) handleUIDeleteLabel(w http.ResponseWriter, r *http.Request) {
-	id      := boardID(r)
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
 	labelID := r.PathValue("labelId")
-	if err := s.reg.RemoveLabel(id, labelID, true); err != nil {
+	if err := ws.Reg.RemoveLabel(id, labelID, true); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.ManageLabelsModal(id, labels, s.token).Render(r.Context(), w)
+	_ = ui.ManageLabelsModal(ws.ID, id, labels, s.token).Render(r.Context(), w)
 }
 
-// PATCH /ui/boards/{id}/labels/{labelId}
+// PATCH /ui/workspaces/{ws}/boards/{id}/labels/{labelId}
 func (s *Server) handleUIRenameLabel(w http.ResponseWriter, r *http.Request) {
-	id      := boardID(r)
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
+	id := boardID(r)
 	labelID := r.PathValue("labelId")
 	var req struct {
 		Name  *string `json:"name"`
@@ -708,24 +821,31 @@ func (s *Server) handleUIRenameLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.reg.UpdateLabel(id, labelID, service.LabelUpdate{
+	if _, err := ws.Reg.UpdateLabel(id, labelID, service.LabelUpdate{
 		Name:  req.Name,
 		Color: req.Color,
 	}); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.ManageLabelsModal(id, labels, s.token).Render(r.Context(), w)
+	_ = ui.ManageLabelsModal(ws.ID, id, labels, s.token).Render(r.Context(), w)
 }
 
-// GET /ui/modals/delete-label/{boardId}/{labelId}
-// Returns the delete-label confirmation dialog as an HTML fragment.
+// GET /ui/modals/delete-label/{boardId}/{labelId}?ws={wsID}
 func (s *Server) handleUIDeleteLabelDialog(w http.ResponseWriter, r *http.Request) {
+	ws := s.workspaceByID(r.URL.Query().Get("ws"))
+	if ws == nil {
+		ws = s.firstWorkspace()
+	}
+	if ws == nil {
+		writeError(w, http.StatusNotFound, "no workspace available")
+		return
+	}
 	bID := r.PathValue("boardId")
 	labelID := r.PathValue("labelId")
-	labels, err := s.reg.ListLabels(bID)
+	labels, err := ws.Reg.ListLabels(bID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -735,34 +855,44 @@ func (s *Server) handleUIDeleteLabelDialog(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "label not found")
 		return
 	}
-	isUsed, err := s.reg.IsLabelUsed(bID, labelID)
+	isUsed, err := ws.Reg.IsLabelUsed(bID, labelID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.DeleteLabelDialog(bID, labelID, lbl.Name, isUsed, s.token).Render(r.Context(), w)
+	_ = ui.DeleteLabelDialog(ws.ID, bID, labelID, lbl.Name, isUsed, s.token).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/labels/{labelId}/archive
-// Archives (prefixes with 💼) a label and returns the updated manage-labels modal.
+// POST /ui/workspaces/{ws}/boards/{id}/labels/{labelId}/archive
 func (s *Server) handleUIArchiveLabel(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
 	labelID := r.PathValue("labelId")
-	if err := s.reg.ArchiveLabel(id, labelID); err != nil {
+	if err := ws.Reg.ArchiveLabel(id, labelID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.ManageLabelsModal(id, labels, s.token).Render(r.Context(), w)
+	_ = ui.ManageLabelsModal(ws.ID, id, labels, s.token).Render(r.Context(), w)
 }
 
-// GET /ui/modals/archive-view-board/{id}
-// Returns the archive view board confirmation dialog as an HTML fragment.
+// GET /ui/modals/archive-view-board/{id}?ws={wsID}
 func (s *Server) handleUIArchiveViewBoardModal(w http.ResponseWriter, r *http.Request) {
+	ws := s.workspaceByID(r.URL.Query().Get("ws"))
+	if ws == nil {
+		ws = s.firstWorkspace()
+	}
+	if ws == nil {
+		writeError(w, http.StatusNotFound, "no workspace available")
+		return
+	}
 	id := r.PathValue("id")
-	vb, parent, err := s.reg.GetViewBoard(id)
+	vb, parent, err := ws.Reg.GetViewBoard(id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -772,28 +902,36 @@ func (s *Server) handleUIArchiveViewBoardModal(w http.ResponseWriter, r *http.Re
 		filterLabelName = lbl.Name
 	}
 	w.Header().Set("Content-Type", "text/html")
-	_ = ui.ArchiveViewBoardDialog(id, vb.Name, vb.FilterLabel, filterLabelName, s.token).Render(r.Context(), w)
+	_ = ui.ArchiveViewBoardDialog(ws.ID, id, vb.Name, vb.FilterLabel, filterLabelName, s.token).Render(r.Context(), w)
 }
 
-// GET /ui/boards/{id}/labels-fragment → <option> elements for view board creation modal.
+// GET /ui/workspaces/{ws}/boards/{id}/labels-fragment
 func (s *Server) handleUIBoardLabelsFragment(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	labels, _ := s.reg.ListLabels(id)
+	labels, _ := ws.Reg.ListLabels(id)
 	w.Header().Set("Content-Type", "text/html")
 	_ = ui.ViewBoardFilterLabelOptions(labels).Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/sync → sync view board with parent and return updated board view.
+// POST /ui/workspaces/{ws}/boards/{id}/sync
 func (s *Server) handleUISyncViewBoard(w http.ResponseWriter, r *http.Request) {
-	id := boardID(r)
-	if s.rejectArchivedViewBoard(w, id) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
 		return
 	}
-	if err := s.reg.SyncViewBoard(id); err != nil {
+	id := boardID(r)
+	if s.rejectArchivedViewBoard(w, ws.Reg, id) {
+		return
+	}
+	if err := ws.Reg.SyncViewBoard(id); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	data, err := s.buildBoardPage(id, showArchivedFromRequest(r))
+	data, err := s.buildBoardPage(ws, id, showArchivedFromRequest(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -802,46 +940,53 @@ func (s *Server) handleUISyncViewBoard(w http.ResponseWriter, r *http.Request) {
 	_ = ui.BoardViewFragment(data).Render(r.Context(), w)
 }
 
-// GET /ui/markdown-hints → static markdown syntax cheatsheet modal fragment.
+// GET /ui/markdown-hints
 func (s *Server) handleUIMarkdownHints(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	_ = ui.MarkdownHintsModal().Render(r.Context(), w)
 }
 
-// POST /ui/boards/{id}/hide → hide a board from the tab bar.
-// Returns 200 + {"navigate_to":"<id>"} when the hidden board was the active one,
-// or 204 otherwise.
+// POST /ui/workspaces/{ws}/boards/{id}/hide
 func (s *Server) handleUIHideBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if err := s.reg.HideBoard(id); err != nil {
+	if err := ws.Reg.HideBoard(id); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	// Detect whether the caller is currently viewing the hidden board.
+	// Check if the caller is currently viewing the hidden board.
 	currentURL := r.Header.Get("HX-Current-URL")
 	var activeBoardID string
 	if u, err := url.Parse(currentURL); err == nil {
 		activeBoardID = path.Base(u.Path)
 	}
 	if activeBoardID == id {
-		// Navigate to the first non-hidden, non-archived board.
-		for _, bi := range s.reg.Boards() {
-			if bi.ID != id && !s.reg.IsHiddenBoard(bi.ID) && !s.reg.IsArchivedViewBoard(bi.ID) {
-				writeJSON(w, http.StatusOK, map[string]string{"navigate_to": bi.ID})
+		// Navigate to the first non-hidden, non-archived board in this workspace.
+		for _, bi := range ws.Reg.Boards() {
+			if bi.ID != id && !ws.Reg.IsHiddenBoard(bi.ID) && !ws.Reg.IsArchivedViewBoard(bi.ID) {
+				writeJSON(w, http.StatusOK, map[string]string{
+					"navigate_to": uiBoardPath(ws.ID, bi.ID),
+				})
 				return
 			}
 		}
-		// No visible board left — client navigates to root, which shows the empty state.
-		writeJSON(w, http.StatusOK, map[string]string{"navigate_to": ""})
+		writeJSON(w, http.StatusOK, map[string]string{"navigate_to": "/ui/workspaces/" + ws.ID})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /ui/boards/{id}/show → restore a hidden board to the tab bar.
+// POST /ui/workspaces/{ws}/boards/{id}/show
 func (s *Server) handleUIShowBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.requireWorkspace(w, r)
+	if ws == nil {
+		return
+	}
 	id := boardID(r)
-	if err := s.reg.ShowBoard(id); err != nil {
+	if err := ws.Reg.ShowBoard(id); err != nil {
 		writeServiceError(w, err)
 		return
 	}

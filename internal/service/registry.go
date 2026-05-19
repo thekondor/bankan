@@ -224,6 +224,14 @@ func (r *Registry) IsArchivedViewBoard(id string) bool {
 	return vb.ArchivedAt != nil
 }
 
+// HasBoard reports whether a board with the given id is registered.
+func (r *Registry) HasBoard(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.entries[id]
+	return ok
+}
+
 // RootDir returns the root directory used for board creation (may be "").
 func (r *Registry) RootDir() string { return r.rootDir }
 

@@ -22,6 +22,8 @@ import (
 
 // ─── test helpers ─────────────────────────────────────────────────────────────
 
+const testWsID = "test"
+
 type testClient struct {
 	srv   *httptest.Server
 	token string
@@ -35,9 +37,10 @@ func newTestServer(t *testing.T) *testClient {
 
 	reg, err := service.NewRegistry([]string{dir}, t.TempDir())
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "test-token"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "test-token"}, logger)
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(srv)
@@ -56,9 +59,10 @@ func newTestServerMultiBoard(t *testing.T) (*testClient, string, string) {
 
 	reg, err := service.NewRegistry([]string{dir1, dir2}, "")
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "test-token"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "test-token"}, logger)
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(srv)
@@ -98,7 +102,7 @@ func (c *testClient) del(path string) *http.Response {
 
 func boardID(t *testing.T, c *testClient) string {
 	t.Helper()
-	resp := c.get("/api/v1/boards")
+	resp := c.get("/api/v1/workspaces/" + testWsID + "/boards")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var boards []map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&boards))
@@ -116,20 +120,20 @@ func decodeJSON(t *testing.T, r io.Reader, v any) {
 func TestServer_TokenRequired_MissingToken(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	resp := c.do("POST", "/api/v1/boards/"+id+"/lanes", map[string]any{"name": "test"}, "")
+	resp := c.do("POST", "/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "test"}, "")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestServer_TokenRequired_WrongToken(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	resp := c.do("POST", "/api/v1/boards/"+id+"/lanes", map[string]any{"name": "test"}, "wrong-token")
+	resp := c.do("POST", "/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "test"}, "wrong-token")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestServer_GETRequiresNoToken(t *testing.T) {
 	c := newTestServer(t)
-	resp := c.get("/api/v1/boards")
+	resp := c.get("/api/v1/workspaces/" + testWsID + "/boards")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
@@ -139,14 +143,15 @@ func TestServer_NoTokenMode(t *testing.T) {
 	require.NoError(t, err)
 	reg, err := service.NewRegistry([]string{dir}, "")
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{NoToken: true}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{NoToken: true}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
 	// Mutating request without token should succeed
-	resp, _ := http.Post(ts.URL+"/api/v1/boards/"+filepath.Base(dir)+"/lanes",
+	resp, _ := http.Post(ts.URL+"/api/v1/workspaces/test/boards/"+filepath.Base(dir)+"/lanes",
 		"application/json", bytes.NewBufferString(`{"name":"todo"}`))
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 }
@@ -155,7 +160,7 @@ func TestServer_NoTokenMode(t *testing.T) {
 
 func TestAPI_ListBoards(t *testing.T) {
 	c := newTestServer(t)
-	resp := c.get("/api/v1/boards")
+	resp := c.get("/api/v1/workspaces/" + testWsID + "/boards")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var boards []map[string]any
 	decodeJSON(t, resp.Body, &boards)
@@ -167,7 +172,7 @@ func TestAPI_ListBoards(t *testing.T) {
 func TestAPI_GetBoard(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	resp := c.get("/api/v1/boards/" + id)
+	resp := c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var b map[string]any
 	decodeJSON(t, resp.Body, &b)
@@ -176,7 +181,7 @@ func TestAPI_GetBoard(t *testing.T) {
 
 func TestAPI_GetBoard_NotFound(t *testing.T) {
 	c := newTestServer(t)
-	resp := c.get("/api/v1/boards/nonexistent")
+	resp := c.get("/api/v1/workspaces/" + testWsID + "/boards/nonexistent")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
@@ -184,13 +189,14 @@ func TestAPI_InitBoard_WithRootDir(t *testing.T) {
 	rootDir := t.TempDir()
 	reg, err := service.NewRegistry([]string{}, rootDir)
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
-	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/boards",
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/workspaces/test/boards",
 		bytes.NewBufferString(`{"name":"new-board"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Bankan-Token", "tok")
@@ -211,13 +217,14 @@ func TestAPI_InitBoard_NoRootDir_Forbidden(t *testing.T) {
 	require.NoError(t, err)
 	reg, err := service.NewRegistry([]string{dir}, "")
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
-	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/boards",
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/workspaces/test/boards",
 		bytes.NewBufferString(`{"name":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Bankan-Token", "tok")
@@ -233,38 +240,38 @@ func TestAPI_LaneCRUD(t *testing.T) {
 	id := boardID(t, c)
 
 	// Add lane
-	resp := c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "Backlog"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "Backlog"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var lane map[string]any
 	decodeJSON(t, resp.Body, &lane)
 	assert.Equal(t, "backlog", lane["name"])
 
 	// List lanes
-	resp = c.get("/api/v1/boards/" + id + "/lanes")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/lanes")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var lanes []map[string]any
 	decodeJSON(t, resp.Body, &lanes)
 	assert.Len(t, lanes, 1)
 
 	// Rename lane
-	resp = c.patch("/api/v1/boards/"+id+"/lanes/backlog", map[string]any{"new_name": "Todo"})
+	resp = c.patch("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes/backlog", map[string]any{"new_name": "Todo"})
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Verify rename
-	resp = c.get("/api/v1/boards/" + id + "/lanes")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/lanes")
 	var renamed []map[string]any
 	decodeJSON(t, resp.Body, &renamed)
 	assert.Equal(t, "todo", renamed[0]["name"])
 
 	// Remove lane
-	resp = c.del("/api/v1/boards/" + id + "/lanes/todo")
+	resp = c.del("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/lanes/todo")
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
 func TestAPI_AddLane_Missing_Name(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	resp := c.post("/api/v1/boards/"+id+"/lanes", map[string]any{})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
@@ -275,11 +282,11 @@ func TestAPI_CardCRUD(t *testing.T) {
 	id := boardID(t, c)
 
 	// Setup lane
-	resp := c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "Todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "Todo"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	// Add card
-	resp = c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane": "todo", "title": "Fix bug", "body": "Some body",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -289,7 +296,7 @@ func TestAPI_CardCRUD(t *testing.T) {
 	cardID := card["id"].(string)
 
 	// Get card
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var gotCard map[string]any
 	decodeJSON(t, resp.Body, &gotCard)
@@ -297,7 +304,7 @@ func TestAPI_CardCRUD(t *testing.T) {
 
 	// Update card
 	title := "Fixed bug"
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID), map[string]any{
 		"title": title,
 	})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -306,45 +313,45 @@ func TestAPI_CardCRUD(t *testing.T) {
 	assert.Equal(t, "Fixed bug", updated["title"])
 
 	// List cards in lane
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards?lane=todo", id))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards?lane=todo", id))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var cards []map[string]any
 	decodeJSON(t, resp.Body, &cards)
 	assert.Len(t, cards, 1)
 
 	// Delete card
-	resp = c.do("DELETE", fmt.Sprintf("/api/v1/boards/%s/cards/%s?force=true", id, cardID), nil, c.token)
+	resp = c.do("DELETE", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s?force=true", id, cardID), nil, c.token)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
 func TestAPI_DeleteCard_RequiresForce(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
-	resp = c.del(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID))
+	resp = c.del(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID))
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestAPI_MoveCard(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "done"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "done"})
 
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/move", id, cardID), map[string]any{"to_lane": "done"})
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/move", id, cardID), map[string]any{"to_lane": "done"})
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
-	moved := c.get(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID))
+	moved := c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID))
 	var movedCard map[string]any
 	decodeJSON(t, moved.Body, &movedCard)
 	assert.Equal(t, "done", movedCard["lane"])
@@ -353,25 +360,25 @@ func TestAPI_MoveCard(t *testing.T) {
 func TestAPI_ArchiveAndRestoreCard(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Archive me"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Archive me"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
 	// Archive
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/archive", id, cardID), nil)
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/archive", id, cardID), nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// List archived
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards?archived=true", id))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards?archived=true", id))
 	var archived []map[string]any
 	decodeJSON(t, resp.Body, &archived)
 	require.Len(t, archived, 1)
 	assert.Equal(t, cardID, archived[0]["id"])
 
 	// Restore
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/restore", id, cardID), map[string]any{"to_lane": "todo"})
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/restore", id, cardID), map[string]any{"to_lane": "todo"})
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
@@ -380,14 +387,14 @@ func TestAPI_ArchiveAndRestoreCard(t *testing.T) {
 func TestAPI_Comments(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
 	// Add comment
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "alice",
 		"body":   "Great card!",
 	})
@@ -398,7 +405,7 @@ func TestAPI_Comments(t *testing.T) {
 	assert.Equal(t, "Great card!", cm["body"])
 
 	// List comments
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var comments []map[string]any
 	decodeJSON(t, resp.Body, &comments)
@@ -408,13 +415,13 @@ func TestAPI_Comments(t *testing.T) {
 func TestAPI_AddComment_EmptyBody(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "alice", "body": "",
 	})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -423,13 +430,13 @@ func TestAPI_AddComment_EmptyBody(t *testing.T) {
 func TestAPI_UpdateComment(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "alice", "body": "Original body",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -437,7 +444,7 @@ func TestAPI_UpdateComment(t *testing.T) {
 	decodeJSON(t, resp.Body, &cm)
 	commentID := cm["id"].(string)
 
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments/%s", id, cardID, commentID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments/%s", id, cardID, commentID), map[string]any{
 		"body": "Edited body",
 	})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -447,7 +454,7 @@ func TestAPI_UpdateComment(t *testing.T) {
 	assert.Equal(t, "alice", updated["author"])
 	assert.Equal(t, "Edited body", updated["body"])
 
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID))
 	var comments []map[string]any
 	decodeJSON(t, resp.Body, &comments)
 	require.Len(t, comments, 1)
@@ -457,16 +464,16 @@ func TestAPI_UpdateComment(t *testing.T) {
 func TestAPI_UpdateComment_NotFound(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
-	c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "alice", "body": "Some comment",
 	})
 
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments/zzzzz", id, cardID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments/zzzzz", id, cardID), map[string]any{
 		"body": "New body",
 	})
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -475,20 +482,20 @@ func TestAPI_UpdateComment_NotFound(t *testing.T) {
 func TestAPI_UpdateComment_EmptyBody(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{"lane": "todo", "title": "Card"})
 	var card map[string]any
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "alice", "body": "Some comment",
 	})
 	var cm map[string]any
 	decodeJSON(t, resp.Body, &cm)
 	commentID := cm["id"].(string)
 
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments/%s", id, cardID, commentID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments/%s", id, cardID, commentID), map[string]any{
 		"body": "",
 	})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -501,7 +508,7 @@ func TestAPI_LabelCRUD(t *testing.T) {
 	id := boardID(t, c)
 
 	// Add label
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var lbl map[string]any
 	decodeJSON(t, resp.Body, &lbl)
@@ -509,24 +516,24 @@ func TestAPI_LabelCRUD(t *testing.T) {
 	labelID := lbl["id"].(string)
 
 	// List labels
-	resp = c.get("/api/v1/boards/" + id + "/labels")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/labels")
 	var labels []map[string]any
 	decodeJSON(t, resp.Body, &labels)
 	assert.Len(t, labels, 1)
 
 	// Update label
 	newName := "Defect"
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/labels/%s", id, labelID), map[string]any{"name": &newName})
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/labels/%s", id, labelID), map[string]any{"name": &newName})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var updated map[string]any
 	decodeJSON(t, resp.Body, &updated)
 	assert.Equal(t, "Defect", updated["name"])
 
 	// Remove label (force=true permanently deletes)
-	resp = c.do("DELETE", fmt.Sprintf("/api/v1/boards/%s/labels/%s?force=true", id, labelID), nil, c.token)
+	resp = c.do("DELETE", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/labels/%s?force=true", id, labelID), nil, c.token)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
-	resp = c.get("/api/v1/boards/" + id + "/labels")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/labels")
 	var labelsAfter []map[string]any
 	decodeJSON(t, resp.Body, &labelsAfter)
 	assert.Empty(t, labelsAfter)
@@ -536,17 +543,17 @@ func TestAPI_RemoveLabel_DefaultArchives(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
 
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var lbl map[string]any
 	decodeJSON(t, resp.Body, &lbl)
 	labelID := lbl["id"].(string)
 
 	// Default DELETE archives (no ?force=true)
-	resp = c.del(fmt.Sprintf("/api/v1/boards/%s/labels/%s", id, labelID))
+	resp = c.del(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/labels/%s", id, labelID))
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
-	resp = c.get("/api/v1/boards/" + id + "/labels")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/labels")
 	var labels []map[string]any
 	decodeJSON(t, resp.Body, &labels)
 	require.Len(t, labels, 1)
@@ -556,7 +563,7 @@ func TestAPI_RemoveLabel_DefaultArchives(t *testing.T) {
 func TestAPI_AddLabel_MissingFields(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "bug"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]any{"name": "bug"})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
@@ -565,10 +572,10 @@ func TestAPI_AddLabel_MissingFields(t *testing.T) {
 func TestAPI_MultiBoard_IndependentLanes(t *testing.T) {
 	c, id1, id2 := newTestServerMultiBoard(t)
 
-	c.post("/api/v1/boards/"+id1+"/lanes", map[string]any{"name": "todo"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id1+"/lanes", map[string]any{"name": "todo"})
 
 	// Board2 should have no lanes
-	resp := c.get("/api/v1/boards/" + id2 + "/lanes")
+	resp := c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id2 + "/lanes")
 	var lanes []map[string]any
 	decodeJSON(t, resp.Body, &lanes)
 	assert.Empty(t, lanes)
@@ -595,9 +602,10 @@ func TestAPI_ViewBoard_SyncAndArchive(t *testing.T) {
 
 	reg, err := service.NewRegistry([]string{parentDir, viewDir}, "")
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -620,22 +628,22 @@ func TestAPI_ViewBoard_SyncAndArchive(t *testing.T) {
 	}
 
 	// Get view board
-	resp := doReq("GET", "/api/v1/boards/"+viewID, nil)
+	resp := doReq("GET", "/api/v1/workspaces/test/boards/"+viewID, nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var vb map[string]any
 	decodeJSON(t, resp.Body, &vb)
 	assert.Equal(t, true, vb["is_view"])
 
 	// Sync
-	resp = doReq("POST", "/api/v1/boards/"+viewID+"/sync", nil)
+	resp = doReq("POST", "/api/v1/workspaces/test/boards/"+viewID+"/sync", nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Archive view board
-	resp = doReq("POST", "/api/v1/boards/"+viewID+"/archive", nil)
+	resp = doReq("POST", "/api/v1/workspaces/test/boards/"+viewID+"/archive", nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Get again - should be archived
-	resp = doReq("GET", "/api/v1/boards/"+viewID, nil)
+	resp = doReq("GET", "/api/v1/workspaces/test/boards/"+viewID, nil)
 	decodeJSON(t, resp.Body, &vb)
 	assert.NotNil(t, vb["archived_at"])
 }
@@ -645,15 +653,15 @@ func TestAPI_ViewBoard_SyncAndArchive(t *testing.T) {
 func TestUI_Root_Redirect(t *testing.T) {
 	c := newTestServer(t)
 	resp, _ := http.Get(c.srv.URL + "/")
-	// Should redirect to /ui/boards/{id}
+	// Should redirect to /ui/workspaces/{ws}/boards/{id}
 	assert.Equal(t, http.StatusOK, resp.StatusCode) // follows redirect
-	assert.Contains(t, resp.Request.URL.Path, "/ui/boards/")
+	assert.Contains(t, resp.Request.URL.Path, "/ui/workspaces/")
 }
 
 func TestUI_Board_Page(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	resp, _ := http.Get(c.srv.URL + "/ui/boards/" + id)
+	resp, _ := http.Get(c.srv.URL + "/ui/workspaces/" + testWsID + "/boards/" + id)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(body), "bankan")
@@ -675,17 +683,17 @@ func TestAPI_FullLifecycle(t *testing.T) {
 	id := boardID(t, c)
 
 	// 1. Add two lanes
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "done"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "done"})
 
 	// 2. Add a label
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "feature", "color": "#3b82f6"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]any{"name": "feature", "color": "#3b82f6"})
 	var lbl map[string]any
 	decodeJSON(t, resp.Body, &lbl)
 	labelID := lbl["id"].(string)
 
 	// 3. Add a card with the label
-	resp = c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane": "todo", "title": "Build REST API", "body": "Implementation", "label_ids": []string{labelID},
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -695,36 +703,36 @@ func TestAPI_FullLifecycle(t *testing.T) {
 	assert.Contains(t, card["labels"], labelID)
 
 	// 4. Add a comment
-	c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "dev", "body": "Implemented!",
 	})
 
 	// 5. Move to done
-	c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/move", id, cardID), map[string]any{"to_lane": "done"})
+	c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/move", id, cardID), map[string]any{"to_lane": "done"})
 
 	// 6. Verify card is in done
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID))
 	decodeJSON(t, resp.Body, &card)
 	assert.Equal(t, "done", card["lane"])
 
 	// 7. Archive card
-	c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/archive", id, cardID), nil)
+	c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/archive", id, cardID), nil)
 
 	// 8. Verify archived
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards?archived=true", id))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards?archived=true", id))
 	var archived []map[string]any
 	decodeJSON(t, resp.Body, &archived)
 	require.Len(t, archived, 1)
 	assert.NotNil(t, archived[0]["archived_at"])
 
 	// 9. Restore
-	c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/restore", id, cardID), map[string]any{"to_lane": "todo"})
+	c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/restore", id, cardID), map[string]any{"to_lane": "todo"})
 
 	// 10. Delete permanently
-	c.do("DELETE", fmt.Sprintf("/api/v1/boards/%s/cards/%s?force=true", id, cardID), nil, c.token)
+	c.do("DELETE", fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s?force=true", id, cardID), nil, c.token)
 
 	// 11. Verify gone
-	resp = c.get(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID))
+	resp = c.get(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID))
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
@@ -752,8 +760,9 @@ func newTestServerWithParentBoard(t *testing.T) (*testClient, string, bankan.Lab
 	reg, err := service.NewRegistry([]string{parentDir}, rootDir)
 	require.NoError(t, err)
 
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(srv)
@@ -765,7 +774,7 @@ func newTestServerWithParentBoard(t *testing.T) (*testClient, string, bankan.Lab
 func TestAPI_InitViewBoard_WithRootDir(t *testing.T) {
 	c, parentID, lbl := newTestServerWithParentBoard(t)
 
-	resp := c.post("/api/v1/view-boards", map[string]any{
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/view-boards", map[string]any{
 		"name":            "Sprint One",
 		"parent_id":       parentID,
 		"filter_label_id": lbl.ID,
@@ -782,7 +791,7 @@ func TestAPI_InitViewBoard_WithRootDir(t *testing.T) {
 	assert.Equal(t, lbl.ID, result["filter_label_id"])
 
 	// The new view board must appear in the board list.
-	listResp := c.get("/api/v1/boards")
+	listResp := c.get("/api/v1/workspaces/" + testWsID + "/boards")
 	var boards []map[string]any
 	decodeJSON(t, listResp.Body, &boards)
 	ids := make([]string, len(boards))
@@ -799,13 +808,14 @@ func TestAPI_InitViewBoard_NoRootDir_Forbidden(t *testing.T) {
 	require.NoError(t, err)
 	reg, err := service.NewRegistry([]string{parentDir}, "")
 	require.NoError(t, err)
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
-	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/view-boards",
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/workspaces/test/view-boards",
 		bytes.NewBufferString(`{"name":"x","parent_id":"parent","filter_label_id":"y"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Bankan-Token", "tok")
@@ -837,8 +847,9 @@ func TestUI_SyncViewBoard(t *testing.T) {
 	_, err = parentReg.AddCard(parentID, "backlog", "Task One", "body", []string{lbl.ID})
 	require.NoError(t, err)
 
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -846,7 +857,7 @@ func TestUI_SyncViewBoard(t *testing.T) {
 	viewID := filepath.Base(viewDir)
 
 	// Sync via UI endpoint — expect HTML back (board view fragment).
-	req, _ := http.NewRequest("POST", ts.URL+"/ui/boards/"+viewID+"/sync", nil)
+	req, _ := http.NewRequest("POST", ts.URL+"/ui/workspaces/test/boards/"+viewID+"/sync", nil)
 	req.Header.Set("X-Bankan-Token", "tok")
 	resp, _ := http.DefaultClient.Do(req)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -856,7 +867,7 @@ func TestUI_SyncViewBoard(t *testing.T) {
 
 	// After sync, the card should now be visible in the view board.
 	cardsResp, _ := http.DefaultClient.Do(func() *http.Request {
-		r, _ := http.NewRequest("GET", ts.URL+"/api/v1/boards/"+viewID+"/cards", nil)
+		r, _ := http.NewRequest("GET", ts.URL+"/api/v1/workspaces/test/boards/"+viewID+"/cards", nil)
 		return r
 	}())
 	var cards []map[string]any
@@ -875,8 +886,8 @@ func TestUI_CardModal_PermalinkButtons(t *testing.T) {
 	id := boardID(t, c)
 
 	// Create a lane and a card.
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane": "todo", "title": "Permalink card", "body": "body text",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -902,8 +913,8 @@ func TestUI_CardModal_CommentPermalinkButton(t *testing.T) {
 	id := boardID(t, c)
 
 	// Create a lane, a card, and a comment.
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane": "todo", "title": "Card with comment",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -911,7 +922,7 @@ func TestUI_CardModal_CommentPermalinkButton(t *testing.T) {
 	decodeJSON(t, resp.Body, &card)
 	cardID := card["id"].(string)
 
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/comments", id, cardID), map[string]any{
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/comments", id, cardID), map[string]any{
 		"author": "alice", "body": "Hello world",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -967,8 +978,9 @@ func TestUI_CardModal_CardRemovedFromView(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start the HTTP server.
+	ws := &service.Workspace{ID: testWsID, Name: testWsID, Reg: reg}
 	logger := log.New(io.Discard, "", 0)
-	srv, err := server.New(reg, server.Config{Token: "tok"}, logger)
+	srv, err := server.New([]*service.Workspace{ws}, server.Config{Token: "tok"}, logger)
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -988,7 +1000,7 @@ func TestUI_CardModal_CardRemovedFromView(t *testing.T) {
 
 	// The modal must name the parent board and link to the card there.
 	assert.Contains(t, html, "Parent Board", "modal must mention the parent board name")
-	assert.Contains(t, html, "/ui/boards/"+parentID+"?card="+cardID,
+	assert.Contains(t, html, "/ui/workspaces/test/boards/"+parentID+"?card="+cardID,
 		"modal must contain a direct link to the card on the parent board")
 }
 
@@ -997,23 +1009,23 @@ func TestAPI_CardPrimaryLabel(t *testing.T) {
 	id := boardID(t, c)
 
 	// Setup
-	resp := c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "Todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "Todo"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	resp = c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "Feature", "color": "#3b82f6"})
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]any{"name": "Feature", "color": "#3b82f6"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var labelResp map[string]any
 	decodeJSON(t, resp.Body, &labelResp)
 	labelID := labelResp["id"].(string)
 
-	resp = c.post("/api/v1/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]any{"name": "Bug", "color": "#ef4444"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var bugResp map[string]any
 	decodeJSON(t, resp.Body, &bugResp)
 	bugID := bugResp["id"].(string)
 
 	// Card starts with only Bug as a regular label; Feature is not yet assigned.
-	resp = c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane": "todo", "title": "Card", "label_ids": []string{bugID},
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -1022,7 +1034,7 @@ func TestAPI_CardPrimaryLabel(t *testing.T) {
 	cardID := cardResp["id"].(string)
 
 	// Set Feature as primary label — must also be added to regular labels.
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID), map[string]any{
 		"primary_label": labelID,
 	})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1035,7 +1047,7 @@ func TestAPI_CardPrimaryLabel(t *testing.T) {
 
 	// Clear primary label
 	empty := ""
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID), map[string]any{
 		"primary_label": empty,
 	})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1044,7 +1056,7 @@ func TestAPI_CardPrimaryLabel(t *testing.T) {
 	assert.Empty(t, cleared["primary_label"], "primary label must be cleared")
 
 	// Setting an invalid label ID must return 404
-	resp = c.patch(fmt.Sprintf("/api/v1/boards/%s/cards/%s", id, cardID), map[string]any{
+	resp = c.patch(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s", id, cardID), map[string]any{
 		"primary_label": "zzzzz",
 	})
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -1063,8 +1075,8 @@ func toStringSlice(in []any) []string {
 func TestAPI_DuplicateCard(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
-	c.post("/api/v1/boards/"+id+"/lanes", map[string]any{"name": "todo"})
-	resp := c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]any{"name": "todo"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane": "todo", "title": "Original", "body": "some body",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -1072,7 +1084,7 @@ func TestAPI_DuplicateCard(t *testing.T) {
 	decodeJSON(t, resp.Body, &src)
 	srcID := src["id"].(string)
 
-	resp = c.post(fmt.Sprintf("/api/v1/boards/%s/cards/%s/duplicate", id, srcID), nil)
+	resp = c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/%s/duplicate", id, srcID), nil)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	var dup map[string]any
@@ -1087,18 +1099,18 @@ func TestAPI_DuplicateCard_NotFound(t *testing.T) {
 	c := newTestServer(t)
 	id := boardID(t, c)
 
-	resp := c.post(fmt.Sprintf("/api/v1/boards/%s/cards/nope0/duplicate", id), nil)
+	resp := c.post(fmt.Sprintf("/api/v1/workspaces/test/boards/%s/cards/nope0/duplicate", id), nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestAPI_ReorderBoards(t *testing.T) {
 	c, id1, id2 := newTestServerMultiBoard(t)
 
-	resp := c.post("/api/v1/boards/reorder", map[string]any{"ids": []string{id2, id1}})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/reorder", map[string]any{"ids": []string{id2, id1}})
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Verify new order via list endpoint.
-	resp = c.get("/api/v1/boards")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var boards []map[string]any
 	decodeJSON(t, resp.Body, &boards)
@@ -1109,13 +1121,13 @@ func TestAPI_ReorderBoards(t *testing.T) {
 
 func TestAPI_ReorderBoards_NotFound(t *testing.T) {
 	c := newTestServer(t)
-	resp := c.post("/api/v1/boards/reorder", map[string]any{"ids": []string{"does-not-exist"}})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/reorder", map[string]any{"ids": []string{"does-not-exist"}})
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestAPI_ReorderBoards_EmptyIDs(t *testing.T) {
 	c := newTestServer(t)
-	resp := c.post("/api/v1/boards/reorder", map[string]any{"ids": []string{}})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/reorder", map[string]any{"ids": []string{}})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
@@ -1123,15 +1135,15 @@ func TestAPI_HideBoard_ShowBoard(t *testing.T) {
 	c, id1, id2 := newTestServerMultiBoard(t)
 
 	// Hide board1 — not the active board (no HX-Current-URL header).
-	resp := c.post("/api/v1/boards/"+id1+"/hide", nil)
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id1+"/hide", nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Board still listed but hidden field should be set (checked via build).
-	resp = c.post("/api/v1/boards/"+id1+"/show", nil)
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id1+"/show", nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Hide unknown board.
-	resp = c.post("/api/v1/boards/nope0/hide", nil)
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/nope0/hide", nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
 	_ = id2 // referenced to avoid unused error
@@ -1140,8 +1152,8 @@ func TestAPI_HideBoard_ShowBoard(t *testing.T) {
 func TestUI_HideBoard_NonActive_Returns204(t *testing.T) {
 	c, id1, id2 := newTestServerMultiBoard(t)
 
-	// POST /ui/boards/{id}/hide without HX-Current-URL → 204
-	req, _ := http.NewRequest("POST", c.srv.URL+"/ui/boards/"+id1+"/hide", nil)
+	// POST /ui/workspaces/{ws}/boards/{id}/hide without HX-Current-URL → 204
+	req, _ := http.NewRequest("POST", c.srv.URL+"/ui/workspaces/"+testWsID+"/boards/"+id1+"/hide", nil)
 	req.Header.Set("X-Bankan-Token", c.token)
 	resp, _ := http.DefaultClient.Do(req)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
@@ -1152,28 +1164,28 @@ func TestUI_HideBoard_NonActive_Returns204(t *testing.T) {
 func TestUI_HideBoard_Active_ReturnsNavigateTo(t *testing.T) {
 	c, id1, id2 := newTestServerMultiBoard(t)
 
-	// POST /ui/boards/{id}/hide with HX-Current-URL pointing at id1 → 200 + navigate_to
-	req, _ := http.NewRequest("POST", c.srv.URL+"/ui/boards/"+id1+"/hide", nil)
+	// POST /ui/workspaces/{ws}/boards/{id}/hide with HX-Current-URL pointing at id1 → 200 + navigate_to
+	req, _ := http.NewRequest("POST", c.srv.URL+"/ui/workspaces/"+testWsID+"/boards/"+id1+"/hide", nil)
 	req.Header.Set("X-Bankan-Token", c.token)
-	req.Header.Set("HX-Current-URL", c.srv.URL+"/ui/boards/"+id1)
+	req.Header.Set("HX-Current-URL", c.srv.URL+"/ui/workspaces/"+testWsID+"/boards/"+id1)
 	resp, _ := http.DefaultClient.Do(req)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	var body map[string]string
 	decodeJSON(t, resp.Body, &body)
-	assert.Equal(t, id2, body["navigate_to"])
+	assert.Equal(t, "/ui/workspaces/"+testWsID+"/boards/"+id2, body["navigate_to"])
 }
 
 func TestUI_ShowBoard_Returns204(t *testing.T) {
 	c, id1, _ := newTestServerMultiBoard(t)
 
 	// First hide it.
-	req, _ := http.NewRequest("POST", c.srv.URL+"/ui/boards/"+id1+"/hide", nil)
+	req, _ := http.NewRequest("POST", c.srv.URL+"/ui/workspaces/"+testWsID+"/boards/"+id1+"/hide", nil)
 	req.Header.Set("X-Bankan-Token", c.token)
 	resp, _ := http.DefaultClient.Do(req)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Then restore it.
-	req, _ = http.NewRequest("POST", c.srv.URL+"/ui/boards/"+id1+"/show", nil)
+	req, _ = http.NewRequest("POST", c.srv.URL+"/ui/workspaces/"+testWsID+"/boards/"+id1+"/show", nil)
 	req.Header.Set("X-Bankan-Token", c.token)
 	resp, _ = http.DefaultClient.Do(req)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
@@ -1184,7 +1196,7 @@ func TestUI_DeleteLabelDialog_NoUsage(t *testing.T) {
 	id := boardID(t, c)
 
 	// Add a label.
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var lbl map[string]any
 	decodeJSON(t, resp.Body, &lbl)
@@ -1206,16 +1218,16 @@ func TestUI_DeleteLabelDialog_WithUsage(t *testing.T) {
 	id := boardID(t, c)
 
 	// Add a label.
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var lbl map[string]any
 	decodeJSON(t, resp.Body, &lbl)
 	labelID := lbl["id"].(string)
 
 	// Add a lane and a card that uses the label.
-	resp = c.post("/api/v1/boards/"+id+"/lanes", map[string]string{"name": "Backlog"})
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/lanes", map[string]string{"name": "Backlog"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	resp = c.post("/api/v1/boards/"+id+"/cards", map[string]any{
+	resp = c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/cards", map[string]any{
 		"lane":      "backlog",
 		"title":     "Task",
 		"label_ids": []string{labelID},
@@ -1237,18 +1249,18 @@ func TestUI_ArchiveLabel(t *testing.T) {
 	id := boardID(t, c)
 
 	// Add a label.
-	resp := c.post("/api/v1/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
+	resp := c.post("/api/v1/workspaces/"+testWsID+"/boards/"+id+"/labels", map[string]string{"name": "Bug", "color": "#ef4444"})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var lbl map[string]any
 	decodeJSON(t, resp.Body, &lbl)
 	labelID := lbl["id"].(string)
 
 	// Archive it.
-	resp = c.post("/ui/boards/"+id+"/labels/"+labelID+"/archive", nil)
+	resp = c.post("/ui/workspaces/"+testWsID+"/boards/"+id+"/labels/"+labelID+"/archive", nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Verify label is now prefixed with 💼.
-	resp = c.get("/api/v1/boards/" + id + "/labels")
+	resp = c.get("/api/v1/workspaces/" + testWsID + "/boards/" + id + "/labels")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var labels []map[string]any
 	decodeJSON(t, resp.Body, &labels)

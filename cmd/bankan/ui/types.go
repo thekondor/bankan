@@ -9,6 +9,12 @@ import (
 
 // ─── shared data types used across templates ──────────────────────────────
 
+type WorkspaceData struct {
+	ID       string
+	Name     string
+	IsActive bool
+}
+
 type BoardData struct {
 	ID         string
 	Name       string
@@ -36,16 +42,19 @@ type BoardPageData struct {
 	FilterLabel        string
 	ShowArchived       bool // true when ?show_archived=true is active
 	IsReadonly         bool // true when the current board is an archived view board
+	CurrentWorkspace   WorkspaceData
+	Workspaces         []WorkspaceData
 }
 
 type CardDetailData struct {
-	Card       *bankan.Card
-	BoardID    string
-	Labels     []bankan.Label
-	Comments   []bankan.Comment
-	Token      string
-	IsView     bool
-	IsReadonly bool // true when the board is an archived view board
+	Card        *bankan.Card
+	BoardID     string
+	WorkspaceID string
+	Labels      []bankan.Label
+	Comments    []bankan.Comment
+	Token       string
+	IsView      bool
+	IsReadonly  bool // true when the board is an archived view board
 }
 
 // labelColor returns the hex color for a label ID from the labels slice.

@@ -28,12 +28,13 @@ templ BoardPage(data BoardPageData) {
 			id="board-view"
 			hx-ext="morph"
 			data-board={ data.CurrentBoard.ID }
+			data-workspace={ data.CurrentWorkspace.ID }
 		>
 			for _, lc := range data.Lanes {
 				if lc.IsVirtual {
 					@ArchivedLaneSection(lc, data.Labels, data.CurrentBoard.ID, data.Token)
 				} else {
-					@Lane(lc, data.Labels, data.CurrentBoard.ID, data.Token, data.IsView, data.IsReadonly)
+					@Lane(lc, data.Labels, data.CurrentWorkspace.ID, data.CurrentBoard.ID, data.Token, data.IsView, data.IsReadonly)
 				}
 			}
 			if !data.ShowArchived && !data.IsReadonly {
@@ -52,45 +53,46 @@ templ BoardPage(data BoardPageData) {
 templ boardHeader(data BoardPageData) {
 	<header class="site-header">
 		<a href="/" class="site-logo">⬛ bankan</a>
-		if len(data.HiddenBoards) > 0 || len(data.ArchivedViewBoards) > 0 {
-			<div class="boards-overflow-dropdown" id="boards-overflow-dropdown">
-				<button
-					class="btn-add-board"
-					onclick="toggleBoardsOverflowPanel()"
-					title="Hidden boards and archived views"
-				>▽</button>
-				<div class="boards-overflow-panel" id="boards-overflow-panel" style="display:none">
-					if len(data.HiddenBoards) > 0 {
-						<div class="overflow-panel-section-title">Hidden boards</div>
-						for _, b := range data.HiddenBoards {
+		<div class="boards-overflow-dropdown" id="boards-overflow-dropdown">
+			<button
+				class="btn-add-board"
+				onclick="toggleBoardsOverflowPanel()"
+				title="Hidden boards and archived views"
+			>▽</button>
+			<div class="boards-overflow-panel" id="boards-overflow-panel" style="display:none">
+				if len(data.HiddenBoards) > 0 {
+					<div class="overflow-panel-section-title">Hidden boards</div>
+					for _, b := range data.HiddenBoards {
+						<a
+							class="overflow-board-item"
+							data-hidden-item-id={ b.ID }
+							href="#"
+							onclick={ templ.ComponentScript{Call: "showBoardFromDropdown(event, '" + b.ID + "')"} }
+						>
+							{ b.Name }
+							if b.IsView {
+								<span class="view-badge">view</span>
+							}
+						</a>
+					}
+				} else {
+					<div class="overflow-panel-empty">No hidden boards</div>
+				}
+				if len(data.ArchivedViewBoards) > 0 {
+					<div class="overflow-panel-section-title" id="archived-views-section-title">Archived views</div>
+					for _, b := range data.ArchivedViewBoards {
+						if b.ID != data.CurrentBoard.ID {
 							<a
 								class="overflow-board-item"
-								href="#"
-								onclick={ templ.ComponentScript{Call: "showBoardFromDropdown(event, '" + b.ID + "')"} }
-							>
-								{ b.Name }
-								if b.IsView {
-									<span class="view-badge">view</span>
-								}
-							</a>
+								data-archived-item-id={ b.ID }
+								href={ templ.SafeURL("/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID) }
+								onclick={ templ.ComponentScript{Call: "showArchivedTab(event, '" + b.ID + "')"} }
+							>{ b.Name }</a>
 						}
 					}
-					if len(data.ArchivedViewBoards) > 0 {
-						<div class="overflow-panel-section-title" id="archived-views-section-title">Archived views</div>
-						for _, b := range data.ArchivedViewBoards {
-							if b.ID != data.CurrentBoard.ID {
-								<a
-									class="overflow-board-item"
-									data-archived-item-id={ b.ID }
-									href={ templ.SafeURL("/ui/boards/" + b.ID) }
-									onclick={ templ.ComponentScript{Call: "showArchivedTab(event, '" + b.ID + "')"} }
-								>{ b.Name }</a>
-							}
-						}
-					}
-				</div>
+				}
 			</div>
-		}
+		</div>
 		<nav class="board-tabs" id="board-tabs">
 			// AllBoards contains visible and hidden boards in registry (order:) order.
 			// Hidden boards are rendered display:none so JS can restore them at the
@@ -98,11 +100,12 @@ templ boardHeader(data BoardPageData) {
 			for _, b := range data.AllBoards {
 				if b.IsHidden {
 					<a
-						href={ templ.SafeURL("/ui/boards/" + b.ID) }
+						href={ templ.SafeURL("/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID) }
 						class="board-tab board-tab-hidden"
 						data-hidden-id={ b.ID }
+						data-board-name={ b.Name }
 						style="display:none"
-						hx-get={ "/ui/boards/" + b.ID }
+						hx-get={ "/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID }
 						hx-target="body"
 						hx-push-url="true"
 					>
@@ -110,13 +113,19 @@ templ boardHeader(data BoardPageData) {
 						if b.IsView {
 							<span class="view-badge">view</span>
 						}
+						<button
+							class="close-board-tab"
+							onclick={ templ.ComponentScript{Call: "hideBoard(event, '" + b.ID + "')"} }
+							title="Hide from tab bar"
+						>✕</button>
 					</a>
 				} else {
 					<a
-						href={ templ.SafeURL("/ui/boards/" + b.ID) }
+						href={ templ.SafeURL("/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID) }
 						class={ "board-tab", templ.KV("active", b.ID == data.CurrentBoard.ID) }
 						data-board-id={ b.ID }
-						hx-get={ "/ui/boards/" + b.ID }
+						data-board-name={ b.Name }
+						hx-get={ "/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID }
 						hx-target="body"
 						hx-push-url="true"
 					>
@@ -135,11 +144,11 @@ templ boardHeader(data BoardPageData) {
 			// Archived view board tabs — hidden by default, shown via JS/localStorage.
 			for _, b := range data.ArchivedViewBoards {
 				<a
-					href={ templ.SafeURL("/ui/boards/" + b.ID) }
+					href={ templ.SafeURL("/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID) }
 					class={ "board-tab board-tab-archived", templ.KV("active", b.ID == data.CurrentBoard.ID) }
 					data-archived-id={ b.ID }
 					style="display:none"
-					hx-get={ "/ui/boards/" + b.ID }
+					hx-get={ "/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + b.ID }
 					hx-target="body"
 					hx-push-url="true"
 				>
@@ -159,7 +168,7 @@ templ boardHeader(data BoardPageData) {
 	} else if data.IsView {
 		<button
 			class="btn-add-board"
-			hx-post={ "/ui/boards/" + data.CurrentBoard.ID + "/sync" }
+			hx-post={ "/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + data.CurrentBoard.ID + "/sync" }
 			hx-target="#board-view"
 			hx-swap="outerHTML"
 			hx-headers={ `{"X-Bankan-Token": "` + data.Token + `"}` }
@@ -170,6 +179,8 @@ templ boardHeader(data BoardPageData) {
 				<button class="dropdown-item" onclick={ templ.ComponentScript{Call: "openBoardSettingsModal('" + data.CurrentBoard.ID + "')"} }>⬛ Change color</button>
 				<div class="dropdown-sep"></div>
 				<button class="dropdown-item danger" onclick={ templ.ComponentScript{Call: "openArchiveViewBoardDialog('" + data.CurrentBoard.ID + "', '" + data.CurrentBoard.Name + "', '" + data.FilterLabel + "')"} }>📦 Archive board</button>
+				<div class="dropdown-sep"></div>
+				<button class="dropdown-item" onclick="openAddBoardModal()">+ New Board</button>
 			</div>
 		</div>
 	} else {
@@ -187,29 +198,37 @@ templ boardHeader(data BoardPageData) {
 				if data.ShowArchived {
 					<a
 						class="dropdown-item"
-						href={ templ.SafeURL("/ui/boards/" + data.CurrentBoard.ID) }
-						hx-get={ "/ui/boards/" + data.CurrentBoard.ID }
+						href={ templ.SafeURL("/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + data.CurrentBoard.ID) }
+						hx-get={ "/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + data.CurrentBoard.ID }
 						hx-target="body"
 						hx-push-url="true"
 					>📦 Hide archived</a>
 				} else {
 					<a
 						class="dropdown-item"
-						href={ templ.SafeURL("/ui/boards/" + data.CurrentBoard.ID + "?show_archived=true") }
-						hx-get={ "/ui/boards/" + data.CurrentBoard.ID + "?show_archived=true" }
+						href={ templ.SafeURL("/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + data.CurrentBoard.ID + "?show_archived=true") }
+						hx-get={ "/ui/workspaces/" + data.CurrentWorkspace.ID + "/boards/" + data.CurrentBoard.ID + "?show_archived=true" }
 						hx-target="body"
 						hx-push-url="true"
 					>📦 Show archived</a>
 				}
+				<div class="dropdown-sep"></div>
+				<button class="dropdown-item" onclick="openAddBoardModal()">+ New Board</button>
 			</div>
 		</div>
 	}
-	if !data.IsReadonly {
-		<button
-			class="btn-add-board"
-			onclick="openAddBoardModal()"
-		>+ New Board</button>
-	}
+	<div class="workspace-selector" id="workspace-selector">
+		<button class="btn-add-board workspace-btn" onclick="toggleWorkspacePanel()">▽ <span class="workspace-btn-name">{ data.CurrentWorkspace.Name }</span></button>
+		<div class="workspace-panel" id="workspace-panel" style="display:none">
+			for _, ws := range data.Workspaces {
+				<a
+					class={ "overflow-board-item", templ.KV("overflow-board-item-active", ws.IsActive) }
+					href="#"
+					onclick={ templ.ComponentScript{Call: "switchWorkspace(event, '" + ws.ID + "')"} }
+				>{ ws.Name }</a>
+			}
+		</div>
+	</div>
 	</header>
 }
 
@@ -234,7 +253,7 @@ templ addLaneForm(boardID string, token string) {
 	</div>
 }
 
-templ Lane(lc LaneWithCards, labels []bankan.Label, boardID string, token string, isView bool, isReadonly bool) {
+templ Lane(lc LaneWithCards, labels []bankan.Label, wsID string, boardID string, token string, isView bool, isReadonly bool) {
 	<div
 		class="lane"
 		id={ "lane-" + lc.Lane.Name }
@@ -254,7 +273,7 @@ templ Lane(lc LaneWithCards, labels []bankan.Label, boardID string, token string
 							<div class="dropdown-sep"></div>
 						<button
 							class="dropdown-item danger"
-							hx-delete={ "/ui/boards/" + boardID + "/lanes/" + lc.Lane.Name }
+							hx-delete={ "/ui/workspaces/" + wsID + "/boards/" + boardID + "/lanes/" + lc.Lane.Name }
 							hx-confirm={ "Remove lane '" + lc.Lane.Name + "'? This cannot be undone." }
 							hx-headers={ `{"X-Bankan-Token": "` + token + `"}` }
 							hx-target="closest .lane"
@@ -278,7 +297,7 @@ templ Lane(lc LaneWithCards, labels []bankan.Label, boardID string, token string
 				if c.ArchivedAt != nil {
 					@ArchivedCardItem(c, labels, boardID)
 				} else {
-					@CardItem(c, labels, boardID, token, isView, isReadonly)
+					@CardItem(c, labels, wsID, boardID, token, isView, isReadonly)
 				}
 			}
 		</div>
@@ -348,7 +367,7 @@ templ addCardForm(laneName string, boardID string, labels []bankan.Label, token 
 	</div>
 }
 
-templ CardItem(c *bankan.Card, labels []bankan.Label, boardID string, token string, isView bool, isReadonly bool) {
+templ CardItem(c *bankan.Card, labels []bankan.Label, wsID string, boardID string, token string, isView bool, isReadonly bool) {
 	<div
 		class="card"
 		id={ "card-" + c.ID }
@@ -490,7 +509,7 @@ templ CardItem(c *bankan.Card, labels []bankan.Label, boardID string, token stri
 							>📦 Archive</button>
 							<button
 								class="dropdown-item danger"
-								hx-delete={ "/ui/boards/" + boardID + "/cards/" + c.ID }
+								hx-delete={ "/ui/workspaces/" + wsID + "/boards/" + boardID + "/cards/" + c.ID }
 								hx-confirm={ "Delete card '" + c.Title + "'? This cannot be undone." }
 								hx-target={ "#card-" + c.ID }
 								hx-swap="outerHTML"
@@ -540,12 +559,12 @@ templ ArchivedCardItem(c *bankan.Card, labels []bankan.Label, boardID string) {
 }
 
 // LaneCardsFragment renders only the cards in a lane (for HTMX partial updates).
-templ LaneCardsFragment(cards []*bankan.Card, labels []bankan.Label, boardID string, token string, laneName string, isView bool, isReadonly bool) {
+templ LaneCardsFragment(cards []*bankan.Card, labels []bankan.Label, wsID string, boardID string, token string, laneName string, isView bool, isReadonly bool) {
 	if len(cards) == 0 {
 		<div class="empty-lane">No cards yet</div>
 	}
 	for _, c := range cards {
-		@CardItem(c, labels, boardID, token, isView, isReadonly)
+		@CardItem(c, labels, wsID, boardID, token, isView, isReadonly)
 	}
 }
 
@@ -555,12 +574,13 @@ templ BoardViewFragment(data BoardPageData) {
 		class="board-view"
 		id="board-view"
 		data-board={ data.CurrentBoard.ID }
+		data-workspace={ data.CurrentWorkspace.ID }
 	>
 		for _, lc := range data.Lanes {
 			if lc.IsVirtual {
 				@ArchivedLaneSection(lc, data.Labels, data.CurrentBoard.ID, data.Token)
 			} else {
-				@Lane(lc, data.Labels, data.CurrentBoard.ID, data.Token, data.IsView, data.IsReadonly)
+				@Lane(lc, data.Labels, data.CurrentWorkspace.ID, data.CurrentBoard.ID, data.Token, data.IsView, data.IsReadonly)
 			}
 		}
 		if !data.ShowArchived && !data.IsReadonly {
@@ -575,7 +595,7 @@ templ BoardViewFragment(data BoardPageData) {
 	</main>
 }
 
-templ BoardSettingsModal(boardID string, currentColor string, token string) {
+templ BoardSettingsModal(wsID string, boardID string, currentColor string, token string) {
 	<div class="modal-backdrop" id="board-settings-modal" onclick="closeModalOnBackdrop(event,'board-settings-modal')">
 		<div class="modal" style="max-width:360px" onclick="event.stopPropagation()">
 			<div class="modal-header">
@@ -635,7 +655,7 @@ templ LabelPickerFragment(labels []bankan.Label) {
 }
 
 // ArchiveViewBoardDialog renders the confirmation dialog for archiving a view board.
-templ ArchiveViewBoardDialog(boardID string, boardName string, filterLabelID string, filterLabelName string, token string) {
+templ ArchiveViewBoardDialog(wsID string, boardID string, boardName string, filterLabelID string, filterLabelName string, token string) {
 	<div class="modal-backdrop" id="archive-vb-modal" onclick="closeModalOnBackdrop(event,'archive-vb-modal')">
 		<div class="modal" style="max-width:420px" onclick="event.stopPropagation()">
 			<div class="modal-header">
@@ -675,7 +695,7 @@ templ ArchiveViewBoardDialog(boardID string, boardName string, filterLabelID str
 
 // DeleteLabelDialog renders the confirmation dialog for deleting a label.
 // When isUsed is true a pre-checked checkbox offers to archive instead of delete.
-templ DeleteLabelDialog(boardID string, labelID string, labelName string, isUsed bool, token string) {
+templ DeleteLabelDialog(wsID string, boardID string, labelID string, labelName string, isUsed bool, token string) {
 	<div class="modal-backdrop" id="delete-label-modal" onclick="closeModalOnBackdrop(event,'delete-label-modal')">
 		<div class="modal" style="max-width:420px" onclick="event.stopPropagation()">
 			<div class="modal-header">

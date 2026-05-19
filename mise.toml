@@ -1,10 +1,15 @@
 [tools]
 go = "latest"
 "go:github.com/a-h/templ/cmd/templ" = "latest"
+node = "latest"
 
 [tasks.test]
 description = "Run all tests"
-run = "go test -count 1 ./..."
+run = [
+  "go test -count 1 ./...",
+  "node cmd/bankan/ui/static/overflow-panel_test.js",
+  "node cmd/bankan/ui/static/board-tab-restore_test.js",
+]
 
 [tasks.test-verbose]
 description = "Run all tests with verbose output"
@@ -35,9 +40,9 @@ description = "Run golangci-lint"
 run = "golangci-lint run ./..."
 
 [tasks.demo-gen]
-description = "Populate demo/ with three sample boards (Website Redesign, Mobile App, Q3 Infra)"
+description = "Populate demo/ with two workspaces: Product (website-redesign, mobile-app, view boards) and Ops (q3-infra)"
 run = "bash scripts/demo-gen.sh"
 
 [tasks.demo-serve]
-description = "Serve the demo boards from demo/ (run demo-gen first)"
-run = "go run ./cmd/bankan serve --port 9091 demo/"
+description = "Serve the demo workspaces from demo/ (run demo-gen first)"
+run = "go run ./cmd/bankan serve --port 9091 'MyAwesomeProduct:demo/product' 'Ops:demo/ops'"

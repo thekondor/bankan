@@ -59,10 +59,40 @@ multi-step library workflows end-to-end. **Whenever a card, lane, board, view
 board, label, or comment lifecycle operation changes**, update or add a
 `TestLifecycle_*` test in that file to reflect the current behavior.
 
+## JavaScript tests
+
+UI logic that can be expressed as pure functions (no DOM dependency) must be
+extracted and covered by a Node.js test file.
+
+**Location:** `cmd/bankan/ui/static/overflow-panel_test.js`
+
+**Pattern:**
+- Extract the decision logic into a named pure function in `app.js`.
+- Inline a copy of that function in the test file and exercise it with
+  `assert.strictEqual` from Node's built-in `assert` module.
+- No test framework or `npm install` needed.
+
+**Running the JS tests directly:**
+```bash
+node cmd/bankan/ui/static/overflow-panel_test.js
+```
+
+**`mise run test` runs both** Go and JS tests automatically — the task is
+configured to run `node cmd/bankan/ui/static/overflow-panel_test.js` after
+`go test ./...`. Node.js is declared in `mise.toml` (`node = "latest"`).
+
+**What to test in JS vs Go:**
+- Pure navigation/visibility decision logic → JS test (`overflow-panel_test.js`)
+- Server-rendered HTML structure of templates → Go test (`board_header_test.go`
+  in `package ui`, using `boardHeader(...).Render(...)` + `strings.Contains`)
+- DOM mutation behaviour (show/hide elements interactively) → not currently
+  covered; keep the mutation thin and delegate decisions to pure functions
+
 ## Running tests
 
 ```bash
 go test ./...               # all tests
 go test -run TestFoo ./...  # specific test
 go test -v -count=1 ./...   # verbose, no cache
+mise run test               # Go tests + JS tests (canonical)
 ```

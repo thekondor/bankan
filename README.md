@@ -74,6 +74,24 @@ sprint-1-view/       ← view board, filtered by label "Frontend"
 sprint-2-view/       ← next iteration, same pattern
 ```
 
+## Workspaces
+
+A workspace is a purely UI-level concept — it has no representation on disk. When `bankan serve` is given one or more root directories, each directory becomes a workspace: a named group of boards that are displayed together in the web UI under a shared tab.
+
+```bash
+# Single workspace (name derived from path)
+bankan serve /my/project
+
+# Multiple workspaces with explicit names
+bankan serve my-team:/path/to/boards ops:/other/boards
+```
+
+If no argument is given, the current working directory is used as a single workspace. The workspace name defaults to the last two path components of the directory (e.g. `/a/b/myproject` → `"b/myproject"`), or can be set explicitly with the `name:path` syntax.
+
+Name collisions are resolved automatically by appending `(1)`, `(2)`, … suffixes.
+
+Workspaces exist only as a navigation grouping in the browser. All board state still lives in the underlying directories; workspaces are gone as soon as the server stops.
+
 ## Features
 
 - Single main board with label-color-coded cards for at-a-glance categorization
@@ -83,6 +101,7 @@ sprint-2-view/       ← next iteration, same pattern
 - Cards with title, markdown body, labels, comments
 - Archive lane for completed or parked cards
 - Hidden boards - keep a board accessible but out of the main tab bar
+- Workspaces - UI-only grouping of boards served from the same root directory
 - HTMX web UI served on localhost
 - CLI for all operations
 
@@ -105,6 +124,9 @@ bankan card add --lane "Backlog" --title "First task" --board ./my-board
 
 # Start the web UI (serves on http://localhost:8080)
 bankan serve ./my-board
+
+# Serve two directories as named workspaces
+bankan serve my-team:./my-board ops:./ops-board
 ```
 
 The server prints an `X-Bankan-Token` on startup that is required for all mutating requests. Pass `--no-token` to disable this for local development.
