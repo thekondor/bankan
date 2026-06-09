@@ -53,6 +53,7 @@ func assertSkillContent(t *testing.T, content string) {
 	assert.True(t, strings.HasPrefix(content, "---\n"), "SKILL.md must start with YAML frontmatter")
 	assert.Contains(t, content, "name: bankan")
 	assert.Contains(t, content, "description:")
+	assert.Contains(t, content, "written in **Markdown**")
 
 	// Lane commands.
 	assert.Contains(t, content, "lane list")
@@ -69,8 +70,11 @@ func assertSkillContent(t *testing.T, content string) {
 	assert.Contains(t, content, "card archive")
 	assert.Contains(t, content, "card restore")
 	assert.Contains(t, content, "card delete")
+	assert.Contains(t, content, "card reorder")
+	assert.Contains(t, content, "card duplicate")
 	assert.Contains(t, content, "--archived")   // listing archived cards
 	assert.Contains(t, content, "--add-label")  // label management on edit
+	assert.Contains(t, content, "--primary-label")
 	assert.Contains(t, content, "--force")      // delete confirmation
 
 	// Comment commands with correct positional syntax (not --card flag).
@@ -86,12 +90,27 @@ func assertSkillContent(t *testing.T, content string) {
 	assert.Contains(t, content, "label edit")
 	assert.Contains(t, content, "label remove")
 
-	// Board.
+	// Board and view-board commands.
+	assert.Contains(t, content, "board init")
 	assert.Contains(t, content, "board show")
+	assert.Contains(t, content, "board view create")
+	assert.Contains(t, content, "board view sync")
+	assert.Contains(t, content, "board view show")
+	assert.Contains(t, content, "board view archive")
 
 	// Key rules an agent must know.
-	assert.Contains(t, content, "case-sensitive")  // lane name gotcha
+	assert.Contains(t, content, "case-sensitive")       // lane name gotcha
 	assert.Contains(t, content, "label ID", "agent must know --label takes an ID not a name")
+	assert.Contains(t, content, "ID-only")
+	assert.Contains(t, content, "--board <dir>")
+	assert.Contains(t, content, "--root <dir>")
+	assert.Contains(t, content, "read-only shell search")
+	assert.Contains(t, content, "rg")
+	assert.Contains(t, content, "If multiple cards still match, ask the user instead of guessing.")
+	assert.Contains(t, content, "not valid on view boards")
+	assert.Contains(t, content, "not available on view boards")
+	assert.Contains(t, content, "remove the filter label from the **parent card**")
+	assert.Contains(t, content, "archives the label by default")
 
 	// Stdin support — agents must know about the - pseudo-argument for multi-line content.
 	assert.Contains(t, content, "stdin", "SKILL.md must document stdin via - pseudo-argument")
