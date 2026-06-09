@@ -567,7 +567,6 @@ select option { background: var(--bg-input); }
   color: var(--text-muted);
   line-height: 1.6;
   font-size: 13px;
-  white-space: pre-wrap;
 }
 .card-labels-list { display: flex; gap: 6px; flex-wrap: wrap; }
 .comments-list { display: flex; flex-direction: column; gap: 12px; }
@@ -953,6 +952,7 @@ select option { background: var(--bg-input); }
 .md-body h4, .md-body h5, .md-body h6 { font-size: 0.9em; }
 .md-body ul, .md-body ol { margin: 0 0 0.75em; padding-left: 1.5em; }
 .md-body li { margin-bottom: 0.2em; }
+.md-body li > p { margin: 0; }
 .md-body li > ul, .md-body li > ol { margin: 0.2em 0 0; }
 /* task list checkboxes */
 .md-body input[type="checkbox"] {
